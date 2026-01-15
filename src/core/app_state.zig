@@ -120,11 +120,14 @@ fn renderFrame(self: *AppState) void {
     const origin = c.Vector2{ .x = 0, .y = 0 };
     c.DrawTexturePro(self.render_target.texture, source, dest, origin, 0.0, c.WHITE);
 
-    const txt = if (self.scene.paused) "PAUSED (Press P)" else "Running (Press P)";
-    c.DrawText(txt, 10, 10, 20, c.WHITE);
-    if (self.scene.flip_fluid) |f| {
-        c.DrawText(c.TextFormat("Particles: %d", @as(c_int, @intCast(f.numParticles()))), 10, 40, 20, c.WHITE);
+    if (self.scene.paused) {
+        c.DrawText("PAUSED", 10, 10, 20, c.YELLOW);
+        c.DrawText("Press P to Resume | Press M to Step Frame", 10, 35, 16, c.LIGHTGRAY);
+    } else {
+        c.DrawText("Running", 10, 10, 20, c.GREEN);
+        c.DrawText("Press P to Pause", 10, 35, 16, c.LIGHTGRAY);
     }
+
     c.DrawFPS(@intFromFloat(self.screen_width - 100.0), 10);
 
     c.EndDrawing();
