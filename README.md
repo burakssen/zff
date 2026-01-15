@@ -2,6 +2,8 @@
 
 This project is a Zig port of the FLIP-Fluid simulation from Matthias Müller's Ten Minute Physics series.
 
+![Example Image](images/demo.png)
+
 ## Installation & Usage
 
 ### Prerequisites
