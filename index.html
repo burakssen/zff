@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Raylib Web App</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #111;
+            color: #eee;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden; /* Prevent scrolling */
+        }
+
+        /* The Canvas */
+        canvas.emscripten {
+            border: none;
+            outline: none;
+            background-color: #000;
+            display: block;
+            /* Responsive Logic: */
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain; /* Keeps aspect ratio */
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Overlay UI Elements */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let clicks pass through to canvas */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            height: 50px;
+            width: 50px;
+            margin: 0px auto;
+            border-radius: 50%;
+            border: 4px solid rgba(255, 255, 255, 0.2);
+            border-top-color: #fff;
+            animation: spin 1s infinite linear;
+            pointer-events: auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        #status {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #888;
+        }
+
+        /* Go Back Button */
+        .btn-back {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 10px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            background-color: rgba(51, 51, 51, 0.8);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            transition: all 0.2s ease;
+            pointer-events: auto; /* Re-enable clicks */
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-back:hover {
+            background-color: #fff;
+            color: #111;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .btn-back:active {
+            transform: translateY(0);
+        }
+    </style>
+</head>
+
+<body>
+
+    <canvas id="canvas" class="emscripten" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+
+    <div id="ui-layer">
+        <div id="loading-box">
+            <div class="spinner" id="spinner"></div>
+            <div id="status">Downloading...</div>
+            <progress value="0" max="100" id="progress" hidden></progress>
+        </div>
+        
+        <button class="btn-back" onclick="window.location.href='https://burakssen.com'">
+            &larr; Go Back
+        </button>
+    </div>
+
+    <script type="text/javascript">
+        var statusElement = document.getElementById('status');
+        var progressElement = document.getElementById('progress');
+        var spinnerElement = document.getElementById('spinner');
+        var loadingBox = document.getElementById('loading-box');
+
+        var Module = {
+            print: (function() {
+                return function(text) {
+                    if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                    console.log(text);
+                };
+            })(),
+            printErr: function(text) {
+                if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                console.error(text);
+            },
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+                // As a default initial behavior, pop up an alert when webgl context is lost.
+                canvas.addEventListener("webglcontextlost", function(e) { alert('WebGL context lost. You will need to reload the page.'); e.preventDefault(); }, false);
+                
+                // Focus canvas on click so keyboard input works immediately
+                canvas.addEventListener("click", function() { canvas.focus(); });
+                return canvas;
+            })(),
+            setStatus: function(text) {
+                if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
+                if (text === Module.setStatus.last.text) return;
+                
+                var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+                var now = Date.now();
+                if (m && now - Module.setStatus.last.time < 30) return; // if this is a progress update, skip it if too soon
+                
+                Module.setStatus.last.time = now;
+                Module.setStatus.last.text = text;
+                
+                if (m) {
+                    text = m[1];
+                    progressElement.value = parseInt(m[2])*100;
+                    progressElement.max = parseInt(m[4])*100;
+                    progressElement.hidden = false;
+                    spinnerElement.hidden = false;
+                } else {
+                    progressElement.value = null;
+                    progressElement.max = null;
+                    progressElement.hidden = true;
+                    if (!text) {
+                        spinnerElement.hidden = true;
+                        loadingBox.style.display = 'none'; // Hide loading box when done
+                    }
+                }
+                statusElement.innerHTML = text;
+            },
+            totalDependencies: 0,
+            monitorRunDependencies: function(left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+                Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+            },
+            
+            // Hook into initialization
+            onRuntimeInitialized: function() {
+                console.log("Raylib WebAssembly initialized.");
+                // We don't manually set width/height here; we let Raylib's InitWindow handle the internal resolution
+                // and CSS handle the display size.
+            }
+        };
+
+        Module.setStatus('Downloading...');
+        
+        window.onerror = function(event) {
+            Module.setStatus('Exception thrown, see JavaScript console');
+            spinnerElement.style.display = 'none';
+            Module.setStatus = function(text) {
+                if (text) Module.printErr('[post-exception status] ' + text);
+            };
+        };
+    </script>
+
+    {{{ SCRIPT }}}
+
+</body>
+</html>

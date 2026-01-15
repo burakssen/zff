@@ -1,0 +1,1 @@
+This project is a ZIG rewrite of the FLIP-Fluid simulation from Matthias Müller's Ten Minute Physics series. The FLIP (Fluid-Implicit Particle) method is a hybrid approach that combines particle-based and grid-based techniques to simulate realistic fluid dynamics efficiently.
