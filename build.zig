@@ -11,17 +11,17 @@ pub fn build(b: *std.Build) !void {
     });
     const raylib_artifact = raylib_dep.artifact("raylib");
 
-    // Create graphics module
+    // Create modules
     const graphics_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/graphics/graphics.zig"),
+        .link_libc = true,
     });
-
+    // Graphics module needs C headers for @cImport
     graphics_mod.linkLibrary(raylib_artifact);
     graphics_mod.addIncludePath(raylib_dep.path("src"));
 
-    // Create core module with graphics dependency
     const core_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -29,9 +29,12 @@ pub fn build(b: *std.Build) !void {
         .imports = &.{
             .{ .name = "graphics", .module = graphics_mod },
         },
+        .link_libc = true,
     });
+    // Core module also uses @cImport
+    core_mod.linkLibrary(raylib_artifact);
+    core_mod.addIncludePath(raylib_dep.path("src"));
 
-    // Create fluid module with core dependency
     const fluid_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -41,11 +44,9 @@ pub fn build(b: *std.Build) !void {
         },
     });
 
-    // Add fluid dependency to graphics and core modules
     graphics_mod.addImport("fluid", fluid_mod);
     core_mod.addImport("fluid", fluid_mod);
 
-    // Create executable module
     const exe_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -54,42 +55,43 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "core", .module = core_mod },
         },
     });
+    exe_mod.linkLibrary(raylib_artifact);
+    exe_mod.addIncludePath(raylib_dep.path("src"));
 
     // --- Emscripten Build (WASM) ---
     if (target.result.os.tag == .emscripten) {
+        const emsdk_dep = b.dependency("emsdk", .{});
+        const sysroot_include = emsdk_dep.path("upstream/emscripten/cache/sysroot/include");
+        graphics_mod.addIncludePath(sysroot_include);
+        core_mod.addIncludePath(sysroot_include);
+        exe_mod.addIncludePath(sysroot_include);
+
         const wasm = b.addLibrary(.{
             .name = "flip",
             .root_module = exe_mod,
         });
+        wasm.linkLibrary(raylib_artifact);
+        wasm.addIncludePath(raylib_dep.path("src"));
 
-        // 1. Create Emscripten Flags
-        // Corresponds to CMake: target_compile_options(flip PRIVATE -O3 -msimd128)
-        // and LINK_FLAGS: -s USE_GLFW=3 -s ASYNCIFY=1 ...
         var emcc_flags = raylib.emsdk.emccDefaultFlags(b.allocator, .{
             .optimize = optimize,
-            .asyncify = true, // Matches -s ASYNCIFY=1
+            .asyncify = true,
         });
-
         try emcc_flags.put("-msimd128", {});
 
-        // 2. Create Emscripten Settings
         var emcc_settings = raylib.emsdk.emccDefaultSettings(b.allocator, .{
             .optimize = optimize,
         });
-
-        // Matches CMake: -s INITIAL_MEMORY=134217728
-        try emcc_settings.put("INITIAL_MEMORY", "134217728"); // 128MB
+        try emcc_settings.put("INITIAL_MEMORY", "134217728");
         try emcc_settings.put("USE_GLFW", "3");
-        try emcc_settings.put("EXPORTED_FUNCTIONS", "[_main]"); // Minimal export
+        try emcc_settings.put("EXPORTED_FUNCTIONS", "[_main]");
 
-        // 3. Compile to HTML
         const emcc_step = raylib.emsdk.emccStep(b, raylib_artifact, wasm, .{
             .optimize = optimize,
             .flags = emcc_flags,
             .settings = emcc_settings,
-            .shell_file_path = b.path("index.html"), // Ensure this file exists
+            .shell_file_path = b.path("index.html"),
             .install_dir = .{ .custom = "web" },
-            // Matches CMake: --preload-file shaders@shaders
             .preload_paths = &.{},
         });
 
@@ -97,20 +99,16 @@ pub fn build(b: *std.Build) !void {
         return;
     }
 
-    // --- Native Build (Desktop) ---
-
-    // Note on Optimizations:
-    // CMake: /O2 (MSVC) or -O3 (Linux/Mac) -> Handled by passing '-Doptimize=ReleaseFast' to `zig build`
-    // CMake: -march=native -> Zig defaults to native cpu model when building locally.
-
     const exe = b.addExecutable(.{
         .name = "flip",
         .root_module = exe_mod,
     });
+    exe.linkLibrary(raylib_artifact);
 
-    // macOS specific linking
     if (target.result.os.tag == .macos) {
         exe.linkFramework("OpenGL");
+    } else if (target.result.os.tag == .linux or target.result.os.tag == .windows) {
+        exe.linkSystemLibrary("GL");
     }
 
     b.installArtifact(exe);
