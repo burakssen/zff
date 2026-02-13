@@ -149,22 +149,13 @@ fn initializeScene(self: *AppState, width: f32, height: f32) !void {
     const num_particles_x: usize = @intFromFloat(std.math.floor((relative_water_width * tank_width - 2.0 * cell_size - 2.0 * particle_radius) / delta_x));
     const num_particles_y: usize = @intFromFloat(std.math.floor((relative_water_height * tank_height - 2.0 * cell_size - 2.0 * particle_radius) / delta_y));
     const max_particles = num_particles_x * num_particles_y;
-
     const fluid_ptr = try self.allocator.create(FlipFluid);
     fluid_ptr.* = try FlipFluid.init(self.allocator, density, tank_width, tank_height, cell_size, particle_radius, max_particles);
     self.scene.flip_fluid = fluid_ptr;
 
     self.scene.renderer = try ParticleRenderer.init(self.allocator, max_particles);
 
-    // Manually resize array lists
     if (self.scene.flip_fluid) |f| {
-        try f.particles.pos_x.resize(self.allocator, num_particles_x * num_particles_y);
-        try f.particles.pos_y.resize(self.allocator, num_particles_x * num_particles_y);
-        try f.particles.vel_x.resize(self.allocator, num_particles_x * num_particles_y);
-        try f.particles.vel_y.resize(self.allocator, num_particles_x * num_particles_y);
-        try f.particles.color_r.resize(self.allocator, num_particles_x * num_particles_y);
-        try f.particles.color_g.resize(self.allocator, num_particles_x * num_particles_y);
-        try f.particles.color_b.resize(self.allocator, num_particles_x * num_particles_y);
         f.particles.count = num_particles_x * num_particles_y;
     }
 

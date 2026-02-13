@@ -39,9 +39,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/fluid/fluid.zig"),
-        .imports = &.{
-            .{ .name = "core", .module = core_mod },
-        },
+        .imports = &.{},
     });
 
     graphics_mod.addImport("fluid", fluid_mod);

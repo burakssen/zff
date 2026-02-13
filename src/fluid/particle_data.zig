@@ -2,16 +2,19 @@ const std = @import("std");
 
 const ParticleData = @This();
 
+pub const fields = .{ "pos_x", "pos_y", "vel_x", "vel_y", "color_r", "color_g", "color_b" };
+
 allocator: std.mem.Allocator,
-// Position data (accessed together during spatial queries)
+
+// Position data
 pos_x: std.ArrayList(f32),
 pos_y: std.ArrayList(f32),
 
-// Velocity data (accessed together during integration)
+// Velocity data
 vel_x: std.ArrayList(f32),
 vel_y: std.ArrayList(f32),
 
-// Color data (only accessed during rendering)
+// Color data
 color_r: std.ArrayList(f32),
 color_g: std.ArrayList(f32),
 color_b: std.ArrayList(f32),
@@ -35,23 +38,15 @@ pub fn init(allocator: std.mem.Allocator) ParticleData {
 }
 
 pub fn deinit(self: *ParticleData) void {
-    self.pos_x.deinit(self.allocator);
-    self.pos_y.deinit(self.allocator);
-    self.vel_x.deinit(self.allocator);
-    self.vel_y.deinit(self.allocator);
-    self.color_r.deinit(self.allocator);
-    self.color_g.deinit(self.allocator);
-    self.color_b.deinit(self.allocator);
+    inline for (fields) |field_name| {
+        @field(self, field_name).deinit(self.allocator);
+    }
 }
 
 pub fn resize(self: *ParticleData, n: usize) !void {
     self.capacity = n;
-    try self.pos_x.resize(self.allocator, n);
-    try self.pos_y.resize(self.allocator, n);
-    try self.vel_x.resize(self.allocator, n);
-    try self.vel_y.resize(self.allocator, n);
-    try self.color_r.resize(self.allocator, n);
-    try self.color_g.resize(self.allocator, n);
-    try self.color_b.resize(self.allocator, n);
+    inline for (fields) |field_name| {
+        try @field(self, field_name).resize(self.allocator, n);
+    }
     self.count = 0;
 }

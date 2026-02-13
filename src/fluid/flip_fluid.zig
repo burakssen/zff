@@ -1,7 +1,6 @@
 const std = @import("std");
 
-const core = @import("core");
-const utils = core.utils;
+const utils = @import("utils.zig");
 
 const ParticleData = @import("particle_data.zig");
 const SimulationConfig = @import("simulation_config.zig");
@@ -13,6 +12,7 @@ const FlipFluid = @This();
 
 allocator: std.mem.Allocator,
 particles: ParticleData,
+scratch_particles: ParticleData,
 config: SimulationConfig,
 pressure: PressureGrid,
 velocity: VelocityGrid,
@@ -23,6 +23,9 @@ pub fn init(allocator: std.mem.Allocator, density: f32, width: f32, height: f32,
     const config = SimulationConfig.init(width, height, spacing, particle_radius, density);
     var particles = ParticleData.init(allocator);
     try particles.resize(max_particles);
+
+    var scratch_particles = ParticleData.init(allocator);
+    try scratch_particles.resize(max_particles);
 
     var velocity = VelocityGrid.init(allocator);
     try velocity.resize(config.num_cells);
@@ -48,6 +51,7 @@ pub fn init(allocator: std.mem.Allocator, density: f32, width: f32, height: f32,
     return FlipFluid{
         .allocator = allocator,
         .particles = particles,
+        .scratch_particles = scratch_particles,
         .config = config,
         .pressure = pressure,
         .velocity = velocity,
@@ -58,6 +62,7 @@ pub fn init(allocator: std.mem.Allocator, density: f32, width: f32, height: f32,
 
 pub fn deinit(self: *FlipFluid) void {
     self.particles.deinit();
+    self.scratch_particles.deinit();
     self.pressure.deinit();
     self.velocity.deinit();
     self.spatial_hash.deinit();
@@ -144,26 +149,9 @@ fn buildSpatialHash(self: *FlipFluid) !void {
     // Create temporary cursor
     var cell_cursor = try self.spatial_hash.first_cell_particle.clone(self.allocator);
     defer cell_cursor.deinit(self.allocator);
-    // Temporary arrays for sorted data
-    var temp_pos_x: std.ArrayList(f32) = try .initCapacity(self.allocator, n);
-    var temp_pos_y: std.ArrayList(f32) = try .initCapacity(self.allocator, n);
-    var temp_vel_x: std.ArrayList(f32) = try .initCapacity(self.allocator, n);
-    var temp_vel_y: std.ArrayList(f32) = try .initCapacity(self.allocator, n);
-    var temp_col_r: std.ArrayList(f32) = try .initCapacity(self.allocator, n);
-    var temp_col_g: std.ArrayList(f32) = try .initCapacity(self.allocator, n);
-    var temp_col_b: std.ArrayList(f32) = try .initCapacity(self.allocator, n);
-
-    // Fill arrays to correct size (required because we use slices directly in sort logic below)
-    temp_pos_x.appendNTimesAssumeCapacity(0, n);
-    temp_pos_y.appendNTimesAssumeCapacity(0, n);
-    temp_vel_x.appendNTimesAssumeCapacity(0, n);
-    temp_vel_y.appendNTimesAssumeCapacity(0, n);
-    temp_col_r.appendNTimesAssumeCapacity(0, n);
-    temp_col_g.appendNTimesAssumeCapacity(0, n);
-    temp_col_b.appendNTimesAssumeCapacity(0, n);
     const cursor_items = cell_cursor.items;
 
-    // Sort particles
+    // Sort particles into scratch_particles
     for (0..n) |i| {
         const x = pos_x[i];
         const y = pos_y[i];
@@ -174,30 +162,15 @@ fn buildSpatialHash(self: *FlipFluid) !void {
         const dest: usize = @intCast(cursor_items[idx]);
         cursor_items[idx] += 1;
 
-        temp_pos_x.items[dest] = x;
-        temp_pos_y.items[dest] = y;
-        temp_vel_x.items[dest] = self.particles.vel_x.items[i];
-        temp_vel_y.items[dest] = self.particles.vel_y.items[i];
-        temp_col_r.items[dest] = self.particles.color_r.items[i];
-        temp_col_g.items[dest] = self.particles.color_g.items[i];
-        temp_col_b.items[dest] = self.particles.color_b.items[i];
+        inline for (ParticleData.fields) |field_name| {
+            @field(self.scratch_particles, field_name).items[dest] = @field(self.particles, field_name).items[i];
+        }
     }
 
-    // Swap buffers (deinit old, replace with new)
-    self.particles.pos_x.deinit(self.allocator);
-    self.particles.pos_x = temp_pos_x;
-    self.particles.pos_y.deinit(self.allocator);
-    self.particles.pos_y = temp_pos_y;
-    self.particles.vel_x.deinit(self.allocator);
-    self.particles.vel_x = temp_vel_x;
-    self.particles.vel_y.deinit(self.allocator);
-    self.particles.vel_y = temp_vel_y;
-    self.particles.color_r.deinit(self.allocator);
-    self.particles.color_r = temp_col_r;
-    self.particles.color_g.deinit(self.allocator);
-    self.particles.color_g = temp_col_g;
-    self.particles.color_b.deinit(self.allocator);
-    self.particles.color_b = temp_col_b;
+    // Copy sorted data back to main particles
+    inline for (ParticleData.fields) |field_name| {
+        @memcpy(@field(self.particles, field_name).items[0..n], @field(self.scratch_particles, field_name).items[0..n]);
+    }
 }
 
 fn resolveCollisions(self: *FlipFluid, numIters: i32) void {
@@ -335,9 +308,8 @@ fn transferToGrid(self: *FlipFluid) void {
     const h_sz = self.config.cell_size;
     const h2 = 0.5 * h_sz;
 
-    // Loop comp 0 (u) and 1 (v)
-    var comp: i32 = 0;
-    while (comp < 2) : (comp += 1) {
+    // Loop comp 0 (u) and 1 (v) using comptime inline for
+    inline for (0..2) |comp| {
         const dx = if (comp == 0) 0.0 else h2;
         const dy = if (comp == 0) h2 else 0.0;
 
