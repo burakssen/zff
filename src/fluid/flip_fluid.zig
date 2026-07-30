@@ -573,9 +573,7 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
             const fx = x * inv_spacing;
             const fy = (y - h2) * inv_spacing;
             const x0 = @min(@as(i32, @intFromFloat(fx)), self.grid_size_x - 2);
-            const x1 = @min(x0 + 1, self.grid_size_x - 1);
             const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
-            const y1 = @min(y0 + 1, self.grid_size_y - 1);
 
             var w00: f32 = undefined;
             var w10: f32 = undefined;
@@ -584,15 +582,15 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
 
             bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
 
-            const _i00: usize = @intCast(x0 * n + y0);
-            const _i10: usize = @intCast(x1 * n + y0);
-            const _i11: usize = @intCast(x1 * n + y1);
-            const _i01: usize = @intCast(x0 * n + y1);
+            const _i00: usize = @intCast(x0 * self.grid_size_y + y0);
+            const _i10: usize = _i00 + gy_us;
+            const _i01: usize = _i00 + 1;
+            const _i11: usize = _i10 + 1;
 
-            const v0: f32 = if (type_arr[_i00] != .air or (_i00 >= n_us and type_arr[_i00 - n_us] != .air)) 1.0 else 0.0;
-            const v1: f32 = if (type_arr[_i10] != .air or (_i10 >= n_us and type_arr[_i10 - n_us] != .air)) 1.0 else 0.0;
-            const v2: f32 = if (type_arr[_i11] != .air or (_i11 >= n_us and type_arr[_i11 - n_us] != .air)) 1.0 else 0.0;
-            const v3: f32 = if (type_arr[_i01] != .air or (_i01 >= n_us and type_arr[_i01 - n_us] != .air)) 1.0 else 0.0;
+            const v0: f32 = if (type_arr[_i00] != .air or (_i00 >= gy_us and type_arr[_i00 - gy_us] != .air)) 1.0 else 0.0;
+            const v1: f32 = if (type_arr[_i10] != .air or (_i10 >= gy_us and type_arr[_i10 - gy_us] != .air)) 1.0 else 0.0;
+            const v2: f32 = if (type_arr[_i11] != .air or (_i11 >= gy_us and type_arr[_i11 - gy_us] != .air)) 1.0 else 0.0;
+            const v3: f32 = if (type_arr[_i01] != .air or (_i01 >= gy_us and type_arr[_i01 - gy_us] != .air)) 1.0 else 0.0;
 
             const tw = v0 * w00 + v1 * w10 + v2 * w11 + v3 * w01;
 
@@ -610,9 +608,7 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
             const fx = (x - h2) * inv_spacing;
             const fy = y * inv_spacing;
             const x0 = @min(@as(i32, @intFromFloat(fx)), self.grid_size_x - 2);
-            const x1 = @min(x0 + 1, self.grid_size_x - 1);
             const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
-            const y1 = @min(y0 + 1, self.grid_size_y - 2);
 
             var w00: f32 = undefined;
             var w10: f32 = undefined;
@@ -620,10 +616,10 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
             var w01: f32 = undefined;
             bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
 
-            const _i00: usize = @intCast(x0 * n + y0);
-            const _i10: usize = @intCast(x1 * n + y0);
-            const _i11: usize = @intCast(x1 * n + y1);
-            const _i01: usize = @intCast(x0 * n + y1);
+            const _i00: usize = @intCast(x0 * self.grid_size_y + y0);
+            const _i10: usize = _i00 + gy_us;
+            const _i01: usize = _i00 + 1;
+            const _i11: usize = _i10 + 1;
 
             const v0: f32 = if (type_arr[_i00] != .air or (_i00 > 0 and type_arr[_i00 - 1] != .air)) 1.0 else 0.0;
             const v1: f32 = if (type_arr[_i10] != .air or (_i10 > 0 and type_arr[_i10 - 1] != .air)) 1.0 else 0.0;
