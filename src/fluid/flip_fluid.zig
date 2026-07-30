@@ -125,24 +125,14 @@ fn integrateParticles(self: *FlipFluid, dt: f32, gravity: f32) void {
     const vel_y = self.particles.vel_y;
     const dt_gravity = dt * gravity;
 
-    // ponytail: NEON SIMD 8-lane vector particle integration
-    const vec_dt: @Vector(8, f32) = @splat(dt);
-    const vec_dt_grav: @Vector(8, f32) = @splat(dt_gravity);
-
     var i: usize = 0;
-    while (i + 8 <= particle_count) : (i += 8) {
-        var vy: @Vector(8, f32) = vel_y[i..][0..8].*;
-        const vx: @Vector(8, f32) = vel_x[i..][0..8].*;
-        var px: @Vector(8, f32) = pos_x[i..][0..8].*;
-        var py: @Vector(8, f32) = pos_y[i..][0..8].*;
-
-        vy += vec_dt_grav;
-        px += vx * vec_dt;
-        py += vy * vec_dt;
-
-        vel_y[i..][0..8].* = vy;
-        pos_x[i..][0..8].* = px;
-        pos_y[i..][0..8].* = py;
+    while (i + 4 <= particle_count) : (i += 4) {
+        inline for (0..4) |offset| {
+            const idx = i + offset;
+            vel_y[idx] += dt_gravity;
+            pos_x[idx] += vel_x[idx] * dt;
+            pos_y[idx] += vel_y[idx] * dt;
+        }
     }
 
     while (i < particle_count) : (i += 1) {
