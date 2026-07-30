@@ -35,9 +35,9 @@ jobs:
             ${{ runner.os }}-zig-
 
       - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
