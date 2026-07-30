@@ -129,6 +129,22 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
+    // Headless Benchmark step
+    const bench_exe = b.addExecutable(.{
+        .name = "zff_bench",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = .ReleaseFast,
+            .root_source_file = b.path("src/bench.zig"),
+        }),
+    });
+    const run_bench_cmd = b.addRunArtifact(bench_exe);
+    if (b.args) |args| {
+        run_bench_cmd.addArgs(args);
+    }
+    const bench_step = b.step("bench", "Run headless physics benchmark");
+    bench_step.dependOn(&run_bench_cmd.step);
+
     // Run step
     const run_step = b.step("run", "Run the flip executable");
     const run_cmd = b.addRunArtifact(exe);

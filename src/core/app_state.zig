@@ -133,6 +133,8 @@ fn renderFrame(self: *AppState) void {
     rl.EndDrawing();
 }
 
+const SceneFactory = @import("../fluid/scene_factory.zig");
+
 fn initializeScene(self: *AppState, width: f32, height: f32) !void {
     const tank_height = height;
     const tank_width = width;
@@ -156,31 +158,11 @@ fn initializeScene(self: *AppState, width: f32, height: f32) !void {
     self.renderer = try ParticleRenderer.init(self.allocator, max_particles);
 
     if (self.flip_fluid) |*f| {
-        f.particles.count = num_particles_x * num_particles_y;
-
-        var particle_index: usize = 0;
-        for (0..num_particles_x) |i| {
-            for (0..num_particles_y) |j| {
-                const x_offset = if (j % 2 == 0) 0.0 else particle_radius;
-                const float_x = @as(f32, @floatFromInt(i));
-                const float_y = @as(f32, @floatFromInt(j));
-
-                f.particles.pos_x[particle_index] = cell_size + particle_radius + delta_x * float_x + x_offset;
-                f.particles.pos_y[particle_index] = cell_size + particle_radius + delta_y * float_y;
-
-                particle_index += 1;
-            }
-        }
-
-        const grid_height: usize = @intCast(f.grid_size_y);
-        const grid_width: usize = @intCast(f.grid_size_x);
-
-        for (0..grid_width) |i| {
-            for (0..grid_height) |j| {
-                const solid_value: f32 = if (i == 0 or i == grid_width - 1 or j == 0) 0.0 else 1.0;
-                f.pressure.s[i * grid_height + j] = solid_value;
-            }
-        }
+        SceneFactory.setupDamBreak(f, .{
+            .relative_width = relative_water_width,
+            .relative_height = relative_water_height,
+            .density = density,
+        });
     }
 
     self.setObstacle(width / 2.0, height / 2.0, true);

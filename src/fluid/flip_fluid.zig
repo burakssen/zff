@@ -437,6 +437,16 @@ fn transferToGrid(self: *FlipFluid) void {
 
     @memcpy(self.velocity.prev_u, self.velocity.u);
     @memcpy(self.velocity.prev_v, self.velocity.v);
+
+    // ponytail: populate active fluid cells list to skip empty air cells during pressure solving
+    var active_count: usize = 0;
+    for (0..self.num_cells) |idx| {
+        if (self.pressure.cell_type[idx] == .fluid) {
+            self.pressure.active_cells[active_count] = idx;
+            active_count += 1;
+        }
+    }
+    self.pressure.active_cell_count = active_count;
 }
 
 fn computeDensity(self: *FlipFluid) void {
@@ -453,9 +463,9 @@ fn computeDensity(self: *FlipFluid) void {
     const pos_y = self.particles.pos_y;
     const dens = self.pressure.density;
 
-    for (0..self.particles.count) |i| {
-        const x = std.math.clamp(pos_x[i], h_sz, max_x_bound);
-        const y = std.math.clamp(pos_y[i], h_sz, max_y_bound);
+    for (0..self.particles.count) |idx_i| {
+        const x = std.math.clamp(pos_x[idx_i], h_sz, max_x_bound);
+        const y = std.math.clamp(pos_y[idx_i], h_sz, max_y_bound);
 
         const fx = (x - h2) * inv_spacing;
         const fy = (y - h2) * inv_spacing;
@@ -498,56 +508,52 @@ fn solvePressure(self: *FlipFluid, num_iters: i32, dt: f32, over_relaxation: f32
     const p = self.pressure.p;
     const s = self.pressure.s;
     const dens = self.pressure.density;
-    const type_arr = self.pressure.cell_type;
 
     const gy: usize = @intCast(self.grid_size_y);
     const gx: usize = @intCast(self.grid_size_x);
     const has_rest = self.rest_density > 0.0;
     const rest_d = self.rest_density;
+    const active = self.pressure.active_cells[0..self.pressure.active_cell_count];
 
     var iter: i32 = 0;
     while (iter < num_iters) : (iter += 1) {
         var rb: usize = 0;
         while (rb < 2) : (rb += 1) {
-            var i: usize = 1;
-            while (i < gx - 1) : (i += 1) {
-                const col_offset = i * gy;
-                const start_j: usize = 1 + ((i + 1 + rb) % 2);
-                var j: usize = start_j;
-                while (j < gy - 1) : (j += 2) {
-                    const c = col_offset + j;
-                    if (type_arr[c] != .fluid) continue;
+            for (active) |c| {
+                const i = c / gy;
+                const j = c % gy;
+                if ((i + j) % 2 != rb) continue;
+                if (i == 0 or i >= gx - 1 or j == 0 or j >= gy - 1) continue;
 
-                    const l = c - gy;
-                    const r = c + gy;
-                    const b = c - 1;
-                    const t = c + 1;
+                const l = c - gy;
+                const r = c + gy;
+                const b = c - 1;
+                const t = c + 1;
 
-                    const sx0 = s[l];
-                    const sx1 = s[r];
-                    const sy0 = s[b];
-                    const sy1 = s[t];
-                    const solid_sum = sx0 + sx1 + sy0 + sy1;
+                const sx0 = s[l];
+                const sx1 = s[r];
+                const sy0 = s[b];
+                const sy1 = s[t];
+                const solid_sum = sx0 + sx1 + sy0 + sy1;
 
-                    if (solid_sum == 0.0) continue;
+                if (solid_sum == 0.0) continue;
 
-                    var div = u[r] - u[c] + v[t] - v[c];
+                var div = u[r] - u[c] + v[t] - v[c];
 
-                    if (has_rest) {
-                        const compression = dens[c] - rest_d;
-                        if (compression > 0.0) {
-                            div -= compression;
-                        }
+                if (has_rest) {
+                    const compression = dens[c] - rest_d;
+                    if (compression > 0.0) {
+                        div -= compression;
                     }
-
-                    const pressure_update = (-div / solid_sum) * over_relaxation;
-                    const cp_update = cp * pressure_update;
-                    p[c] += cp_update;
-                    u[c] -= sx0 * pressure_update;
-                    u[r] += sx1 * pressure_update;
-                    v[c] -= sy0 * pressure_update;
-                    v[t] += sy1 * pressure_update;
                 }
+
+                const pressure_update = (-div / solid_sum) * over_relaxation;
+                const cp_update = cp * pressure_update;
+                p[c] += cp_update;
+                u[c] -= sx0 * pressure_update;
+                u[r] += sx1 * pressure_update;
+                v[c] -= sy0 * pressure_update;
+                v[t] += sy1 * pressure_update;
             }
         }
     }
