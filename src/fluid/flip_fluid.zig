@@ -240,48 +240,35 @@ fn resolveCollisions(self: *FlipFluid, numIters: i32) void {
                     const x1 = @min(xi + 1, hgx - 1);
                     const y1 = @min(yi + 1, hgy_i - 1);
 
-                    // ponytail: pre-fetch active neighbor cell ranges at cell level
-                    var neighbor_ranges: [9]struct { start: usize, end: usize } = undefined;
-                    var num_neighbors: usize = 0;
-
-                    var nxi = x0;
-                    while (nxi <= x1) : (nxi += 1) {
-                        const ncol_off: usize = @as(usize, @intCast(nxi)) * hgy;
-                        var nyi = y0;
-                        while (nyi <= y1) : (nyi += 1) {
-                            const n_idx = ncol_off + @as(usize, @intCast(nyi));
-                            const n_start: usize = @intCast(first[n_idx]);
-                            const n_end: usize = @intCast(first[n_idx + 1]);
-                            if (n_start < n_end) {
-                                neighbor_ranges[num_neighbors] = .{ .start = n_start, .end = n_end };
-                                num_neighbors += 1;
-                            }
-                        }
-                    }
-
                     var i = start;
                     while (i < end) : (i += 1) {
-                        const px = pos_x[i];
-                        const py = pos_y[i];
+                        var nxi = x0;
+                        while (nxi <= x1) : (nxi += 1) {
+                            const ncol_off: usize = @as(usize, @intCast(nxi)) * hgy;
+                            var nyi = y0;
+                            while (nyi <= y1) : (nyi += 1) {
+                                const neighbor_cell_index = ncol_off + @as(usize, @intCast(nyi));
+                                const neighbor_start: usize = @intCast(first[neighbor_cell_index]);
+                                const neighbor_end: usize = @intCast(first[neighbor_cell_index + 1]);
 
-                        for (neighbor_ranges[0..num_neighbors]) |range| {
-                            var j = range.start;
-                            while (j < range.end) : (j += 1) {
-                                if (i == j) continue;
+                                var j = neighbor_start;
+                                while (j < neighbor_end) : (j += 1) {
+                                    if (i == j) continue;
 
-                                const dx = pos_x[j] - px;
-                                const dy = pos_y[j] - py;
-                                const d2 = dx * dx + dy * dy;
+                                    const dx = pos_x[j] - pos_x[i];
+                                    const dy = pos_y[j] - pos_y[i];
+                                    const d2 = dx * dx + dy * dy;
 
-                                if (d2 > min_dist_2 or d2 == 0.0) continue;
+                                    if (d2 > min_dist_2 or d2 == 0.0) continue;
 
-                                const inv_d = 1.0 / std.math.sqrt(d2);
-                                const s = 0.5 * (min_dist * inv_d - 1.0);
+                                    const inv_d = 1.0 / std.math.sqrt(d2);
+                                    const s = 0.5 * (min_dist * inv_d - 1.0);
 
-                                pos_x[i] -= dx * s;
-                                pos_y[i] -= dy * s;
-                                pos_x[j] += dx * s;
-                                pos_y[j] += dy * s;
+                                    pos_x[i] -= dx * s;
+                                    pos_y[i] -= dy * s;
+                                    pos_x[j] += dx * s;
+                                    pos_y[j] += dy * s;
+                                }
                             }
                         }
                     }
