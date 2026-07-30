@@ -549,8 +549,6 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
     const h_sz = self.cell_size;
     const h2 = h_sz * 0.5;
     const inv_spacing = self.inv_cell_size;
-    const n = self.grid_size_y;
-    const n_us: usize = @intCast(n);
     const max_x_bound = @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz;
 
     const pos_x = self.particles.pos_x;
