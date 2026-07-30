@@ -1,46 +1,43 @@
+// ponytail: spatial hash grid using flat slices
 const std = @import("std");
 
 const SpatialHash = @This();
 
-allocator: std.mem.Allocator,
-num_cell_particles: std.ArrayList(i32),
-first_cell_particle: std.ArrayList(i32),
-particle_ids: std.ArrayList(i32),
+num_cell_particles: []i32,
+first_cell_particle: []i32,
+particle_ids: []i32,
 
 grid_size_x: i32,
 grid_size_y: i32,
 num_cells: usize,
 inv_spacing: f32,
 
-pub fn init(allocator: std.mem.Allocator) SpatialHash {
+pub fn init(allocator: std.mem.Allocator, sizeX: i32, sizeY: i32, maxParticles: usize, inv_spacing: f32) !SpatialHash {
+    const num_cells: usize = @intCast(sizeX * sizeY);
+    const num_cell_particles = try allocator.alloc(i32, num_cells);
+    const first_cell_particle = try allocator.alloc(i32, num_cells + 1);
+    const particle_ids = try allocator.alloc(i32, maxParticles);
+    @memset(num_cell_particles, 0);
+    @memset(first_cell_particle, 0);
+    @memset(particle_ids, 0);
+
     return SpatialHash{
-        .allocator = allocator,
-        .num_cell_particles = .empty,
-        .first_cell_particle = .empty,
-        .particle_ids = .empty,
-        .grid_size_x = 0,
-        .grid_size_y = 0,
-        .num_cells = 0,
-        .inv_spacing = 0,
+        .num_cell_particles = num_cell_particles,
+        .first_cell_particle = first_cell_particle,
+        .particle_ids = particle_ids,
+        .grid_size_x = sizeX,
+        .grid_size_y = sizeY,
+        .num_cells = num_cells,
+        .inv_spacing = inv_spacing,
     };
 }
 
-pub fn deinit(self: *SpatialHash) void {
-    self.num_cell_particles.deinit(self.allocator);
-    self.first_cell_particle.deinit(self.allocator);
-    self.particle_ids.deinit(self.allocator);
-}
-
-pub fn resize(self: *SpatialHash, sizeX: i32, sizeY: i32, maxParticles: usize) !void {
-    self.grid_size_x = sizeX;
-    self.grid_size_y = sizeY;
-    self.num_cells = @intCast(sizeX * sizeY);
-    try self.num_cell_particles.resize(self.allocator, self.num_cells);
-    try self.first_cell_particle.resize(self.allocator, self.num_cells + 1);
-    try self.particle_ids.resize(self.allocator, maxParticles);
+pub fn deinit(self: *SpatialHash, allocator: std.mem.Allocator) void {
+    allocator.free(self.num_cell_particles);
+    allocator.free(self.first_cell_particle);
+    allocator.free(self.particle_ids);
 }
 
 pub fn clear(self: *SpatialHash) void {
-    // ponytail: use stdlib @memset to clear cell counts efficiently
-    @memset(self.num_cell_particles.items, 0);
+    @memset(self.num_cell_particles, 0);
 }

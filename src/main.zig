@@ -1,10 +1,10 @@
+// ponytail: main entry point
 const std = @import("std");
 const builtin = @import("builtin");
 
-const core = @import("core");
-const AppState = core.AppState;
+const AppState = @import("core/app_state.zig");
+
 pub fn main() !void {
-    // ponytail: use DebugAllocator for leak detection on native, c_allocator on emscripten
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = if (builtin.os.tag != .emscripten) gpa.deinit();
 

@@ -1,3 +1,4 @@
+// ponytail: build setup generating c.h internally via translateC into @import("raylib") module
 const std = @import("std");
 const raylib = @import("raylib");
 
@@ -11,47 +12,51 @@ pub fn build(b: *std.Build) !void {
     });
     const raylib_artifact = raylib_dep.artifact("raylib");
 
-    // Create modules
-    const graphics_mod = b.createModule(.{
+    // Generate c.h internally and translate it to "raylib" module
+    const write_files = b.addWriteFiles();
+    const c_h = write_files.add("c.h",
+        \\#include <raylib.h>
+        \\#include <rlgl.h>
+        \\#include <raymath.h>
+        \\#if defined(__EMSCRIPTEN__)
+        \\#include <GLES2/gl2.h>
+        \\#elif defined(__APPLE__)
+        \\#define GL_SILENCE_DEPRECATION
+        \\#include <OpenGL/gl.h>
+        \\#else
+        \\#include <GL/gl.h>
+        \\#endif
+        \\#ifndef GL_LINES
+        \\#define GL_LINES 0x0001
+        \\#endif
+        \\
+    );
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = c_h,
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/graphics/graphics.zig"),
-        .link_libc = true,
     });
-    // Graphics module needs C headers for @cImport
-    graphics_mod.linkLibrary(raylib_artifact);
-    graphics_mod.addIncludePath(raylib_dep.path("src"));
+    translate_c.addIncludePath(raylib_dep.path("src"));
 
-    const core_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/core/core.zig"),
-        .imports = &.{
-            .{ .name = "graphics", .module = graphics_mod },
-        },
-        .link_libc = true,
-    });
-    // Core module also uses @cImport
-    core_mod.linkLibrary(raylib_artifact);
-    core_mod.addIncludePath(raylib_dep.path("src"));
+    if (target.result.os.tag == .emscripten) {
+        const emsdk_dep = b.dependency("emsdk", .{});
+        const sysroot_include = emsdk_dep.path("upstream/emscripten/cache/sysroot/include");
+        translate_c.addIncludePath(sysroot_include);
+    } else if (target.result.os.tag == .macos) {
+        translate_c.defineCMacro("GL_SILENCE_DEPRECATION", "");
+    }
 
-    const fluid_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/fluid/fluid.zig"),
-        .imports = &.{},
-    });
-
-    graphics_mod.addImport("fluid", fluid_mod);
-    core_mod.addImport("fluid", fluid_mod);
+    const raylib_mod = translate_c.createModule();
 
     const exe_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/main.zig"),
         .imports = &.{
-            .{ .name = "core", .module = core_mod },
+            .{ .name = "raylib", .module = raylib_mod },
         },
+        .link_libc = true,
     });
     exe_mod.linkLibrary(raylib_artifact);
     exe_mod.addIncludePath(raylib_dep.path("src"));
@@ -60,8 +65,6 @@ pub fn build(b: *std.Build) !void {
     if (target.result.os.tag == .emscripten) {
         const emsdk_dep = b.dependency("emsdk", .{});
         const sysroot_include = emsdk_dep.path("upstream/emscripten/cache/sysroot/include");
-        graphics_mod.addIncludePath(sysroot_include);
-        core_mod.addIncludePath(sysroot_include);
         exe_mod.addIncludePath(sysroot_include);
 
         const wasm = b.addLibrary(.{

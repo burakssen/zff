@@ -1,8 +1,8 @@
+// ponytail: high performance OpenGL particle line renderer
 const std = @import("std");
 
-const c = @import("c.zig").c;
-const fluid = @import("fluid");
-const FlipFluid = fluid.FlipFluid;
+const rl = @import("raylib");
+const FlipFluid = @import("../fluid/flip_fluid.zig");
 
 const ParticleRenderer = @This();
 
@@ -18,21 +18,20 @@ allocator: std.mem.Allocator,
 pub fn init(allocator: std.mem.Allocator, max_count: usize) !ParticleRenderer {
     const vertex_count = max_count * 2; // Lines
 
-    // Allocate client-side buffers
     const pos_data = try allocator.alloc(f32, vertex_count * 3);
     const col_data = try allocator.alloc(u8, vertex_count * 4);
-    // Initialize GL buffers via rlgl
-    const vao_id = c.rlLoadVertexArray();
-    _ = c.rlEnableVertexArray(vao_id);
-    const pos_buffer_id = c.rlLoadVertexBuffer(pos_data.ptr, @intCast(pos_data.len * @sizeOf(f32)), true);
-    c.rlSetVertexAttribute(0, 3, c.RL_FLOAT, false, 0, 0);
-    c.rlEnableVertexAttribute(0);
 
-    const col_buffer_id = c.rlLoadVertexBuffer(col_data.ptr, @intCast(col_data.len * @sizeOf(u8)), true);
-    c.rlSetVertexAttribute(3, 4, c.RL_UNSIGNED_BYTE, true, 0, 0);
-    c.rlEnableVertexAttribute(3);
+    const vao_id = rl.rlLoadVertexArray();
+    _ = rl.rlEnableVertexArray(vao_id);
+    const pos_buffer_id = rl.rlLoadVertexBuffer(pos_data.ptr, @intCast(pos_data.len * @sizeOf(f32)), true);
+    rl.rlSetVertexAttribute(0, 3, rl.RL_FLOAT, false, 0, 0);
+    rl.rlEnableVertexAttribute(0);
 
-    c.rlDisableVertexArray();
+    const col_buffer_id = rl.rlLoadVertexBuffer(col_data.ptr, @intCast(col_data.len * @sizeOf(u8)), true);
+    rl.rlSetVertexAttribute(3, 4, rl.RL_UNSIGNED_BYTE, true, 0, 0);
+    rl.rlEnableVertexAttribute(3);
+
+    rl.rlDisableVertexArray();
 
     return ParticleRenderer{
         .vao_id = vao_id,
@@ -46,9 +45,9 @@ pub fn init(allocator: std.mem.Allocator, max_count: usize) !ParticleRenderer {
 }
 
 pub fn deinit(self: *ParticleRenderer) void {
-    c.rlUnloadVertexArray(self.vao_id);
-    c.rlUnloadVertexBuffer(self.pos_buffer_id);
-    c.rlUnloadVertexBuffer(self.col_buffer_id);
+    rl.rlUnloadVertexArray(self.vao_id);
+    rl.rlUnloadVertexBuffer(self.pos_buffer_id);
+    rl.rlUnloadVertexBuffer(self.col_buffer_id);
     self.allocator.free(self.pos_data);
     self.allocator.free(self.col_data);
 }
@@ -57,10 +56,10 @@ pub fn draw(self: *ParticleRenderer, flip_fluid: *const FlipFluid, c_scale: f32,
     const count = flip_fluid.numParticles();
     if (count == 0) return;
 
-    const pos_x = flip_fluid.particles.pos_x.items;
-    const pos_y = flip_fluid.particles.pos_y.items;
-    const vel_x = flip_fluid.particles.vel_x.items;
-    const vel_y = flip_fluid.particles.vel_y.items;
+    const pos_x = flip_fluid.particles.pos_x;
+    const pos_y = flip_fluid.particles.pos_y;
+    const vel_x = flip_fluid.particles.vel_x;
+    const vel_y = flip_fluid.particles.vel_y;
 
     const trail_length: f32 = 0.01;
 
@@ -103,29 +102,29 @@ pub fn draw(self: *ParticleRenderer, flip_fluid: *const FlipFluid, c_scale: f32,
         self.col_data[_i8 + 7] = 255;
     }
 
-    c.rlUpdateVertexBuffer(self.pos_buffer_id, self.pos_data.ptr, @intCast(count * 2 * 3 * @sizeOf(f32)), 0);
-    c.rlUpdateVertexBuffer(self.col_buffer_id, self.col_data.ptr, @intCast(count * 2 * 4 * @sizeOf(u8)), 0);
+    rl.rlUpdateVertexBuffer(self.pos_buffer_id, self.pos_data.ptr, @intCast(count * 2 * 3 * @sizeOf(f32)), 0);
+    rl.rlUpdateVertexBuffer(self.col_buffer_id, self.col_data.ptr, @intCast(count * 2 * 4 * @sizeOf(u8)), 0);
 
-    const default_shader_id = c.rlGetShaderIdDefault();
-    c.rlEnableShader(default_shader_id);
+    const default_shader_id = rl.rlGetShaderIdDefault();
+    rl.rlEnableShader(default_shader_id);
 
-    const mat_model_view = c.rlGetMatrixModelview();
-    const mat_projection = c.rlGetMatrixProjection();
-    const mat_mvp = c.MatrixMultiply(mat_model_view, mat_projection);
-    const locs = c.rlGetShaderLocsDefault();
-    c.rlSetUniformMatrix(locs[c.RL_SHADER_LOC_MATRIX_MVP], mat_mvp);
+    const mat_model_view = rl.rlGetMatrixModelview();
+    const mat_projection = rl.rlGetMatrixProjection();
+    const mat_mvp = rl.MatrixMultiply(mat_model_view, mat_projection);
+    const locs = rl.rlGetShaderLocsDefault();
+    rl.rlSetUniformMatrix(locs[rl.RL_SHADER_LOC_MATRIX_MVP], mat_mvp);
 
-    var col = c.Vector4{ .x = 1.0, .y = 1.0, .z = 1.0, .w = 1.0 };
-    c.rlSetUniform(locs[c.RL_SHADER_LOC_COLOR_DIFFUSE], &col, c.RL_SHADER_UNIFORM_VEC4, 1);
+    var col = rl.Vector4{ .x = 1.0, .y = 1.0, .z = 1.0, .w = 1.0 };
+    rl.rlSetUniform(locs[rl.RL_SHADER_LOC_COLOR_DIFFUSE], &col, rl.RL_SHADER_UNIFORM_VEC4, 1);
 
-    c.rlActiveTextureSlot(0);
-    c.rlEnableTexture(c.rlGetTextureIdDefault());
+    rl.rlActiveTextureSlot(0);
+    rl.rlEnableTexture(rl.rlGetTextureIdDefault());
     var tex_slot: i32 = 0;
-    c.rlSetUniform(locs[c.RL_SHADER_LOC_MAP_DIFFUSE], &tex_slot, c.RL_SHADER_UNIFORM_INT, 1);
+    rl.rlSetUniform(locs[rl.RL_SHADER_LOC_MAP_DIFFUSE], &tex_slot, rl.RL_SHADER_UNIFORM_INT, 1);
 
-    _ = c.rlEnableVertexArray(self.vao_id);
-    c.glDrawArrays(c.GL_LINES, 0, @intCast(count * 2));
-    c.rlDisableVertexArray();
+    _ = rl.rlEnableVertexArray(self.vao_id);
+    rl.glDrawArrays(rl.GL_LINES, 0, @intCast(count * 2));
+    rl.rlDisableVertexArray();
 
-    c.rlDisableShader();
+    rl.rlDisableShader();
 }
