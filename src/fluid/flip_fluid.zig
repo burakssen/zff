@@ -146,7 +146,7 @@ fn buildSpatialHash(self: *FlipFluid) !void {
     }
     first[self.spatial_hash.num_cells] = sum;
 
-    // Create temporary cursor
+    // ponytail: clone cursor slice directly via ArrayList(T).clone(allocator)
     var cell_cursor = try self.spatial_hash.first_cell_particle.clone(self.allocator);
     defer cell_cursor.deinit(self.allocator);
     const cursor_items = cell_cursor.items;
@@ -167,7 +167,7 @@ fn buildSpatialHash(self: *FlipFluid) !void {
         }
     }
 
-    // Copy sorted data back to main particles
+    // ponytail: use stdlib @memcpy for fast unrolled array copy back
     inline for (ParticleData.fields) |field_name| {
         @memcpy(@field(self.particles, field_name).items[0..n], @field(self.scratch_particles, field_name).items[0..n]);
     }

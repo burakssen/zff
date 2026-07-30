@@ -68,8 +68,8 @@ pub fn build(b: *std.Build) !void {
             .name = "flip",
             .root_module = exe_mod,
         });
-        wasm.linkLibrary(raylib_artifact);
-        wasm.addIncludePath(raylib_dep.path("src"));
+        wasm.root_module.linkLibrary(raylib_artifact);
+        wasm.root_module.addIncludePath(raylib_dep.path("src"));
 
         var emcc_flags = raylib.emsdk.emccDefaultFlags(b.allocator, .{
             .optimize = optimize,
@@ -101,12 +101,12 @@ pub fn build(b: *std.Build) !void {
         .name = "flip",
         .root_module = exe_mod,
     });
-    exe.linkLibrary(raylib_artifact);
+    exe.root_module.linkLibrary(raylib_artifact);
 
     if (target.result.os.tag == .macos) {
-        exe.linkFramework("OpenGL");
+        exe.root_module.linkFramework("OpenGL", .{});
     } else if (target.result.os.tag == .linux or target.result.os.tag == .windows) {
-        exe.linkSystemLibrary("GL");
+        exe.root_module.linkSystemLibrary("GL", .{});
     }
 
     b.installArtifact(exe);

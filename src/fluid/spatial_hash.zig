@@ -41,5 +41,6 @@ pub fn resize(self: *SpatialHash, sizeX: i32, sizeY: i32, maxParticles: usize) !
 }
 
 pub fn clear(self: *SpatialHash) void {
+    // ponytail: use stdlib @memset to clear cell counts efficiently
     @memset(self.num_cell_particles.items, 0);
 }

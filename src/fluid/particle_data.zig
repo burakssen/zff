@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ParticleData = @This();
 
+// ponytail: inline tuple loop over fields avoids repetitive SoA allocation/deinit boilerplate
 pub const fields = .{ "pos_x", "pos_y", "vel_x", "vel_y", "color_r", "color_g", "color_b" };
 
 allocator: std.mem.Allocator,

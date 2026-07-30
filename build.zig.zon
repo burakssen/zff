@@ -3,19 +3,15 @@
     .version = "0.0.1",
     .dependencies = .{
         .raylib = .{
-            .url = "git+https://github.com/raysan5/raylib#439448ad7ccfadd2adb15502e17564d873e4dc92",
-            .hash = "raylib-5.6.0-dev-whq8uHEJDQVOe4JtpRMaaWxGHQq47W4Qo3_XrfCFJsDm",
-        },
-        .entt = .{
-            .url = "git+https://github.com/prime31/zig-ecs#dbf3647c2cc4f327fe87067e40f8436c7f87f209",
-            .hash = "entt-1.0.0-qJPtbNLVAgDPXaUbyRSsBTK75Cr1WujUA92kToJugWry",
+            .url = "git+https://github.com/raysan5/raylib#master",
+            .hash = "raylib-6.0.0-whq8uJHZOwWcKgpVKX36K8IL0TfHpEn2mukYyD84mvNE",
         },
         .emsdk = .{
             .url = "git+https://github.com/emscripten-core/emsdk#c0bb220cb6e6f4e0fabb6f6db9efd53390ef5e56",
             .hash = "N-V-__8AAHQFEABC8QdfXNl_LRxXIKI8ELtz4eZ9Yht7K6m2",
         },
     },
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .paths = .{""},
     .fingerprint = 0x31513cd89702d6f8,
 }
