@@ -563,6 +563,7 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
     const prev_u = self.velocity.prev_u;
     const prev_v = self.velocity.prev_v;
     const type_arr = self.pressure.cell_type;
+    const gy_us: usize = @intCast(self.grid_size_y);
 
     for (0..self.particles.count) |i| {
         const x = std.math.clamp(pos_x[i], h_sz, max_x_bound);
