@@ -2,7 +2,7 @@
 const std = @import("std");
 
 const rl = @import("raylib");
-const FlipFluid = @import("../fluid/flip_fluid.zig");
+const ParticleView = @import("../fluid/particle_data.zig").ParticleView;
 
 const ParticleRenderer = @This();
 
@@ -28,6 +28,8 @@ pub fn init(allocator: std.mem.Allocator, max_count: usize) !ParticleRenderer {
     const vertex_count = max_count * 2; // 2 vertices per line segment
 
     const vertex_data = try allocator.alloc(ParticleVertex, vertex_count);
+    errdefer allocator.free(vertex_data);
+    @memset(vertex_data, std.mem.zeroes(ParticleVertex));
 
     const vao_id = rl.rlLoadVertexArray();
     _ = rl.rlEnableVertexArray(vao_id);
@@ -60,14 +62,14 @@ pub fn deinit(self: *ParticleRenderer) void {
     self.allocator.free(self.vertex_data);
 }
 
-pub fn draw(self: *ParticleRenderer, flip_fluid: *const FlipFluid, c_scale: f32, height: f32) void {
-    const count = flip_fluid.numParticles();
+pub fn draw(self: *ParticleRenderer, particle_view: ParticleView, c_scale: f32, height: f32) void {
+    const count = particle_view.count;
     if (count == 0) return;
 
-    const pos_x = flip_fluid.particles.pos_x;
-    const pos_y = flip_fluid.particles.pos_y;
-    const vel_x = flip_fluid.particles.vel_x;
-    const vel_y = flip_fluid.particles.vel_y;
+    const pos_x = particle_view.pos_x;
+    const pos_y = particle_view.pos_y;
+    const vel_x = particle_view.vel_x;
+    const vel_y = particle_view.vel_y;
 
     // ponytail: pre-multiply scale and trail length constant outside loop
     const trail_scale = 0.01 * c_scale;

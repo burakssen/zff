@@ -12,11 +12,17 @@ dv: []f32, // Denominator for v
 
 pub fn init(allocator: std.mem.Allocator, num_cells: usize) !VelocityGrid {
     const u = try allocator.alloc(f32, num_cells);
+    errdefer allocator.free(u);
     const v = try allocator.alloc(f32, num_cells);
+    errdefer allocator.free(v);
     const prev_u = try allocator.alloc(f32, num_cells);
+    errdefer allocator.free(prev_u);
     const prev_v = try allocator.alloc(f32, num_cells);
+    errdefer allocator.free(prev_v);
     const du = try allocator.alloc(f32, num_cells);
+    errdefer allocator.free(du);
     const dv = try allocator.alloc(f32, num_cells);
+    errdefer allocator.free(dv);
 
     var self = VelocityGrid{
         .u = u,

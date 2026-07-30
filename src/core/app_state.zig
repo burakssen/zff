@@ -12,7 +12,6 @@ flip_fluid: ?FlipFluid = null,
 renderer: ParticleRenderer = undefined,
 
 camera: rl.Camera2D,
-render_target: rl.RenderTexture2D,
 screen_width: f32 = 1280.0,
 screen_height: f32 = 720.0,
 coordinate_scale: f32 = 1.0,
@@ -21,25 +20,25 @@ coordinate_scale: f32 = 1.0,
 sim_params: FlipFluid.SimParams = .{},
 obstacle: FlipFluid.Obstacle = .{ .radius = 0.15 },
 
-frame_number: i32 = 0,
 paused: bool = true,
 show_particles: bool = true,
 show_obstacle: bool = true,
 
 // Input state
 mouse_down: bool = false,
-last_mouse_position: rl.Vector2 = .{ .x = 0, .y = 0 },
+
+// Fixed-step clock accumulator
+accumulator: f32 = 0.0,
 
 allocator: std.mem.Allocator,
 
 pub fn init(allocator: std.mem.Allocator) !AppState {
     rl.InitWindow(1280, 720, "FLIP Fluid (Zig + Raylib)");
-
     rl.SetTargetFPS(0);
+
     var app = AppState{
         .allocator = allocator,
         .camera = std.mem.zeroes(rl.Camera2D),
-        .render_target = undefined,
     };
 
     app.camera.offset = .{ .x = app.screen_width / 2.0, .y = app.screen_height / 2.0 };
@@ -52,13 +51,10 @@ pub fn init(allocator: std.mem.Allocator) !AppState {
 
     try app.initializeScene(simulation_width, simulation_height);
 
-    app.render_target = rl.LoadRenderTexture(@intFromFloat(app.screen_width), @intFromFloat(app.screen_height));
-
     return app;
 }
 
 pub fn deinit(self: *AppState) void {
-    rl.UnloadRenderTexture(self.render_target);
     if (self.flip_fluid) |*f| {
         f.deinit();
     }
@@ -69,7 +65,16 @@ pub fn deinit(self: *AppState) void {
 pub fn update(self: *AppState) !void {
     self.handleInput();
     if (!self.paused) {
-        try self.simulateStep();
+        const step = self.sim_params.dt;
+        const max_substeps: usize = 4;
+        const frame_time = @min(rl.GetFrameTime(), step * @as(f32, @floatFromInt(max_substeps)));
+        self.accumulator += frame_time;
+
+        var substeps: usize = 0;
+        while (self.accumulator >= step and substeps < max_substeps) : (substeps += 1) {
+            self.simulateStep();
+            self.accumulator -= step;
+        }
     }
     self.renderFrame();
 }
@@ -79,11 +84,9 @@ fn handleInput(self: *AppState) void {
         self.paused = !self.paused;
     }
 
-    if (rl.IsKeyDown(rl.KEY_M)) {
+    if (rl.IsKeyPressed(rl.KEY_M)) {
         if (self.paused) {
-            self.simulateStep() catch |err| {
-                std.debug.print("Error in simulateStep: {}\n", .{err});
-            };
+            self.simulateStep();
         }
     }
 
@@ -99,8 +102,6 @@ fn handleInput(self: *AppState) void {
         } else {
             self.setObstacle(x, y, false);
         }
-
-        self.last_mouse_position = mouse_position;
     }
 
     if (rl.IsMouseButtonReleased(rl.MOUSE_LEFT_BUTTON)) {
@@ -150,6 +151,8 @@ fn initializeScene(self: *AppState, width: f32, height: f32) !void {
     const max_particles = num_particles_x * num_particles_y;
 
     self.flip_fluid = try FlipFluid.init(self.allocator, density, tank_width, tank_height, cell_size, particle_radius, max_particles);
+    errdefer if (self.flip_fluid) |*f| f.deinit();
+
     self.renderer = try ParticleRenderer.init(self.allocator, max_particles);
 
     if (self.flip_fluid) |*f| {
@@ -193,10 +196,9 @@ fn setObstacle(self: *AppState, x: f32, y: f32, reset: bool) void {
     self.show_obstacle = true;
 }
 
-pub fn simulateStep(self: *AppState) !void {
+pub fn simulateStep(self: *AppState) void {
     if (self.flip_fluid) |*f| {
-        try f.simulate(self.sim_params, self.obstacle);
-        self.frame_number += 1;
+        f.simulate(self.sim_params, self.obstacle);
     }
 }
 
@@ -205,7 +207,7 @@ fn drawScene(self: *AppState) void {
         rl.rlDrawRenderBatchActive();
         rl.rlSetBlendMode(rl.RL_BLEND_ADDITIVE);
         if (self.flip_fluid) |*f| {
-            self.renderer.draw(f, self.coordinate_scale, self.screen_height);
+            self.renderer.draw(f.particles.view(), self.coordinate_scale, self.screen_height);
         }
         rl.rlSetBlendMode(rl.RL_BLEND_ALPHA);
     }

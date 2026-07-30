@@ -1,4 +1,4 @@
-# Zig Flip Fluid Simulation | ZFF
+# Zig Flip Fluid Simulation | ZFF
 
 This project is a Zig port of the FLIP-Fluid simulation from Matthias Müller's Ten Minute Physics series.
 
@@ -8,7 +8,7 @@ This project is a Zig port of the FLIP-Fluid simulation from Matthias Müller's 
 
 ### Prerequisites
 
-- Zig 0.15.2
+- Zig 0.16.0
 
 ### Building and Running
 
@@ -25,7 +25,13 @@ cd zff
 zig build run -Doptimize=ReleaseFast
 ```
 
-### WebAssembly Build
+### Running Tests:
+
+```bash
+zig build test
+```
+
+### WebAssembly Build
 
 To build for WebAssembly using Emscripten:
 
@@ -33,10 +39,17 @@ To build for WebAssembly using Emscripten:
 zig build -Doptimize=ReleaseFast -Dtarget=wasm32-emscripten
 ```
 
-The output will be in zig-out/web/ and can be served from there directly.
+The output will be in `zig-out/web/` and can be served from there directly.
+
+## Controls
+
+- **P**: Pause / Resume simulation
+- **M**: Advance 1 step when paused
+- **Left Mouse Click & Drag**: Move obstacle sphere
 
 Original implementation: [Matthias Müller's FLIP simulation](https://www.youtube.com/watch?v=XmzBREkK8kY&feature=youtu.be)
 
 ## LICENCE
 
 This project is licensed under the MIT License. See the LICENCE file for details.
+

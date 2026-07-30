@@ -42,21 +42,40 @@ particle_radius: f32,
 density: f32,
 rest_density: f32 = 0.0,
 
+pub const StencilWeights = struct {
+    w00: f32,
+    w10: f32,
+    w11: f32,
+    w01: f32,
+};
+
 pub fn init(allocator: std.mem.Allocator, density: f32, width: f32, height: f32, spacing: f32, particle_radius: f32, max_particles: usize) !FlipFluid {
+    if (width <= 0.0 or height <= 0.0 or spacing <= 0.0 or particle_radius <= 0.0 or density <= 0.0) {
+        return error.InvalidParameter;
+    }
+
     const gx: i32 = @as(i32, @intFromFloat(std.math.floor(width / spacing))) + 1;
     const gy: i32 = @as(i32, @intFromFloat(std.math.floor(height / spacing))) + 1;
     const cell_sz = @max(width / @as(f32, @floatFromInt(gx)), height / @as(f32, @floatFromInt(gy)));
     const num_cells: usize = @intCast(gx * gy);
 
-    const particles = try ParticleData.init(allocator, max_particles);
-    const scratch_particles = try ParticleData.init(allocator, max_particles);
-    const velocity = try VelocityGrid.init(allocator, num_cells);
-    const pressure = try PressureGrid.init(allocator, num_cells);
+    var particles = try ParticleData.init(allocator, max_particles);
+    errdefer particles.deinit(allocator);
+
+    var scratch_particles = try ParticleData.init(allocator, max_particles);
+    errdefer scratch_particles.deinit(allocator);
+
+    var velocity = try VelocityGrid.init(allocator, num_cells);
+    errdefer velocity.deinit(allocator);
+
+    var pressure = try PressureGrid.init(allocator, num_cells);
+    errdefer pressure.deinit(allocator);
 
     const hash_spacing = 2.2 * particle_radius;
     const hash_size_x: i32 = @as(i32, @intFromFloat(std.math.floor(width / hash_spacing))) + 1;
     const hash_size_y: i32 = @as(i32, @intFromFloat(std.math.floor(height / hash_spacing))) + 1;
-    const spatial_hash = try SpatialHash.init(allocator, hash_size_x, hash_size_y, max_particles, 1.0 / hash_spacing);
+    var spatial_hash = try SpatialHash.init(allocator, hash_size_x, hash_size_y, 1.0 / hash_spacing);
+    errdefer spatial_hash.deinit(allocator);
 
     return FlipFluid{
         .allocator = allocator,
@@ -91,22 +110,20 @@ inline fn cellIndex(self: *const FlipFluid, x: i32, y: i32) usize {
     return @intCast(x * self.grid_size_y + y);
 }
 
-inline fn hashIndex(self: *const FlipFluid, x: i32, y: i32) usize {
-    return @intCast(x * self.spatial_hash.grid_size_y + y);
-}
-
-inline fn bilinearWeights(fx: f32, fy: f32, w00: *f32, w10: *f32, w11: *f32, w01: *f32) void {
+inline fn bilinearWeights(fx: f32, fy: f32) StencilWeights {
     const tx = fx - std.math.floor(fx);
     const ty = fy - std.math.floor(fy);
     const sx = 1.0 - tx;
     const sy = 1.0 - ty;
-    w00.* = sx * sy;
-    w10.* = tx * sy;
-    w11.* = tx * ty;
-    w01.* = sx * ty;
+    return .{
+        .w00 = sx * sy,
+        .w10 = tx * sy,
+        .w11 = tx * ty,
+        .w01 = sx * ty,
+    };
 }
 
-pub fn simulate(self: *FlipFluid, params: SimParams, obstacle: Obstacle) !void {
+pub fn simulate(self: *FlipFluid, params: SimParams, obstacle: Obstacle) void {
     self.integrateParticles(params.dt, params.gravity);
     self.buildSpatialHash();
     self.resolveCollisions(params.num_particle_iters);
@@ -243,7 +260,7 @@ fn resolveCollisions(self: *FlipFluid, numIters: i32) void {
 
                                 var j = neighbor_start;
                                 while (j < neighbor_end) : (j += 1) {
-                                    if (i == j) continue;
+                                    if (j <= i) continue;
 
                                     const dx = pos_x[j] - pos_x[i];
                                     const dy = pos_y[j] - pos_y[i];
@@ -271,8 +288,8 @@ fn resolveCollisions(self: *FlipFluid, numIters: i32) void {
 fn handleBoundaryCollisions(self: *FlipFluid, obstacle: Obstacle) void {
     const min_x = self.cell_size + self.particle_radius;
     const max_x = @as(f32, @floatFromInt(self.grid_size_x - 1)) * self.cell_size - self.particle_radius;
-    const min_y = min_x;
-    const max_y = max_x;
+    const min_y = self.cell_size + self.particle_radius;
+    const max_y = @as(f32, @floatFromInt(self.grid_size_y - 1)) * self.cell_size - self.particle_radius;
     const min_dist_2 = (obstacle.radius + self.particle_radius) * (obstacle.radius + self.particle_radius);
 
     const pos_x = self.particles.pos_x;
@@ -331,10 +348,11 @@ fn transferToGrid(self: *FlipFluid) void {
     const h_sz = self.cell_size;
     const h2 = 0.5 * h_sz;
     const max_x_bound = @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz;
+    const max_y_bound = @as(f32, @floatFromInt(self.grid_size_y - 1)) * h_sz;
 
     for (0..self.particles.count) |i| {
         const x = std.math.clamp(pos_x[i], h_sz, max_x_bound);
-        const y = std.math.clamp(pos_y[i], h_sz, max_x_bound);
+        const y = std.math.clamp(pos_y[i], h_sz, max_y_bound);
 
         {
             const fx = x * inv_spacing;
@@ -344,11 +362,7 @@ fn transferToGrid(self: *FlipFluid) void {
             const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
             const y1 = @min(y0 + 1, self.grid_size_y - 1);
 
-            var w00: f32 = undefined;
-            var w10: f32 = undefined;
-            var w11: f32 = undefined;
-            var w01: f32 = undefined;
-            bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
+            const w = bilinearWeights(fx, fy);
 
             const _i00: usize = @intCast(x0 * self.grid_size_y + y0);
             const _i10: usize = @intCast(x1 * self.grid_size_y + y0);
@@ -356,15 +370,15 @@ fn transferToGrid(self: *FlipFluid) void {
             const _i01: usize = @intCast(x0 * self.grid_size_y + y1);
 
             const velocity_val = self.particles.vel_x[i];
-            self.velocity.u[_i00] += w00 * velocity_val;
-            self.velocity.u[_i10] += w10 * velocity_val;
-            self.velocity.u[_i11] += w11 * velocity_val;
-            self.velocity.u[_i01] += w01 * velocity_val;
+            self.velocity.u[_i00] += w.w00 * velocity_val;
+            self.velocity.u[_i10] += w.w10 * velocity_val;
+            self.velocity.u[_i11] += w.w11 * velocity_val;
+            self.velocity.u[_i01] += w.w01 * velocity_val;
 
-            self.velocity.du[_i00] += w00;
-            self.velocity.du[_i10] += w10;
-            self.velocity.du[_i11] += w11;
-            self.velocity.du[_i01] += w01;
+            self.velocity.du[_i00] += w.w00;
+            self.velocity.du[_i10] += w.w10;
+            self.velocity.du[_i11] += w.w11;
+            self.velocity.du[_i01] += w.w01;
         }
 
         {
@@ -375,11 +389,7 @@ fn transferToGrid(self: *FlipFluid) void {
             const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
             const y1 = @min(y0 + 1, self.grid_size_y - 1);
 
-            var w00: f32 = undefined;
-            var w10: f32 = undefined;
-            var w11: f32 = undefined;
-            var w01: f32 = undefined;
-            bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
+            const w = bilinearWeights(fx, fy);
 
             const _i00: usize = @intCast(x0 * self.grid_size_y + y0);
             const _i10: usize = @intCast(x1 * self.grid_size_y + y0);
@@ -387,15 +397,15 @@ fn transferToGrid(self: *FlipFluid) void {
             const _i01: usize = @intCast(x0 * self.grid_size_y + y1);
 
             const velocity_val = self.particles.vel_y[i];
-            self.velocity.v[_i00] += w00 * velocity_val;
-            self.velocity.v[_i10] += w10 * velocity_val;
-            self.velocity.v[_i11] += w11 * velocity_val;
-            self.velocity.v[_i01] += w01 * velocity_val;
+            self.velocity.v[_i00] += w.w00 * velocity_val;
+            self.velocity.v[_i10] += w.w10 * velocity_val;
+            self.velocity.v[_i11] += w.w11 * velocity_val;
+            self.velocity.v[_i01] += w.w01 * velocity_val;
 
-            self.velocity.dv[_i00] += w00;
-            self.velocity.dv[_i10] += w10;
-            self.velocity.dv[_i11] += w11;
-            self.velocity.dv[_i01] += w01;
+            self.velocity.dv[_i00] += w.w00;
+            self.velocity.dv[_i10] += w.w10;
+            self.velocity.dv[_i11] += w.w11;
+            self.velocity.dv[_i01] += w.w01;
         }
     }
 
@@ -436,14 +446,16 @@ fn computeDensity(self: *FlipFluid) void {
     const h2 = h_sz * 0.5;
     const inv_spacing = self.inv_cell_size;
     const n = self.grid_size_y;
+    const max_x_bound = @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz;
+    const max_y_bound = @as(f32, @floatFromInt(self.grid_size_y - 1)) * h_sz;
 
     const pos_x = self.particles.pos_x;
     const pos_y = self.particles.pos_y;
     const dens = self.pressure.density;
 
     for (0..self.particles.count) |i| {
-        const x = std.math.clamp(pos_x[i], h_sz, @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz);
-        const y = std.math.clamp(pos_y[i], h_sz, @as(f32, @floatFromInt(self.grid_size_y - 1)) * h_sz);
+        const x = std.math.clamp(pos_x[i], h_sz, max_x_bound);
+        const y = std.math.clamp(pos_y[i], h_sz, max_y_bound);
 
         const fx = (x - h2) * inv_spacing;
         const fy = (y - h2) * inv_spacing;
@@ -452,15 +464,11 @@ fn computeDensity(self: *FlipFluid) void {
         const y0 = @as(i32, @intFromFloat(fy));
         const y1 = @min(y0 + 1, self.grid_size_y - 2);
 
-        var w00: f32 = undefined;
-        var w10: f32 = undefined;
-        var w11: f32 = undefined;
-        var w01: f32 = undefined;
-        bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
-        dens[@intCast(x0 * n + y0)] += w00;
-        dens[@intCast(x1 * n + y0)] += w10;
-        dens[@intCast(x1 * n + y1)] += w11;
-        dens[@intCast(x0 * n + y1)] += w01;
+        const w = bilinearWeights(fx, fy);
+        dens[@intCast(x0 * n + y0)] += w.w00;
+        dens[@intCast(x1 * n + y0)] += w.w10;
+        dens[@intCast(x1 * n + y1)] += w.w11;
+        dens[@intCast(x0 * n + y1)] += w.w01;
     }
 
     if (self.rest_density == 0.0) {
@@ -550,6 +558,7 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
     const h2 = h_sz * 0.5;
     const inv_spacing = self.inv_cell_size;
     const max_x_bound = @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz;
+    const max_y_bound = @as(f32, @floatFromInt(self.grid_size_y - 1)) * h_sz;
 
     const pos_x = self.particles.pos_x;
     const pos_y = self.particles.pos_y;
@@ -565,7 +574,7 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
 
     for (0..self.particles.count) |i| {
         const x = std.math.clamp(pos_x[i], h_sz, max_x_bound);
-        const y = std.math.clamp(pos_y[i], h_sz, max_x_bound);
+        const y = std.math.clamp(pos_y[i], h_sz, max_y_bound);
 
         // U component
         {
@@ -574,12 +583,7 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
             const x0 = @min(@as(i32, @intFromFloat(fx)), self.grid_size_x - 2);
             const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
 
-            var w00: f32 = undefined;
-            var w10: f32 = undefined;
-            var w11: f32 = undefined;
-            var w01: f32 = undefined;
-
-            bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
+            const w = bilinearWeights(fx, fy);
 
             const _i00: usize = @intCast(x0 * self.grid_size_y + y0);
             const _i10: usize = _i00 + gy_us;
@@ -591,12 +595,12 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
             const v2: f32 = if (type_arr[_i11] != .air or (_i11 >= gy_us and type_arr[_i11 - gy_us] != .air)) 1.0 else 0.0;
             const v3: f32 = if (type_arr[_i01] != .air or (_i01 >= gy_us and type_arr[_i01 - gy_us] != .air)) 1.0 else 0.0;
 
-            const tw = v0 * w00 + v1 * w10 + v2 * w11 + v3 * w01;
+            const tw = v0 * w.w00 + v1 * w.w10 + v2 * w.w11 + v3 * w.w01;
 
             if (tw > 0.0) {
-                const pic = (v0 * w00 * u[_i00] + v1 * w10 * u[_i10] + v2 * w11 * u[_i11] + v3 * w01 * u[_i01]) / tw;
-                const corr = (v0 * w00 * (u[_i00] - prev_u[_i00]) + v1 * w10 * (u[_i10] - prev_u[_i10]) +
-                    v2 * w11 * (u[_i11] - prev_u[_i11]) + v3 * w01 * (u[_i01] - prev_u[_i01])) / tw;
+                const pic = (v0 * w.w00 * u[_i00] + v1 * w.w10 * u[_i10] + v2 * w.w11 * u[_i11] + v3 * w.w01 * u[_i01]) / tw;
+                const corr = (v0 * w.w00 * (u[_i00] - prev_u[_i00]) + v1 * w.w10 * (u[_i10] - prev_u[_i10]) +
+                    v2 * w.w11 * (u[_i11] - prev_u[_i11]) + v3 * w.w01 * (u[_i01] - prev_u[_i01])) / tw;
 
                 vel_x[i] = (1.0 - flip_ratio) * pic + flip_ratio * (vel_x[i] + corr);
             }
@@ -609,11 +613,7 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
             const x0 = @min(@as(i32, @intFromFloat(fx)), self.grid_size_x - 2);
             const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
 
-            var w00: f32 = undefined;
-            var w10: f32 = undefined;
-            var w11: f32 = undefined;
-            var w01: f32 = undefined;
-            bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
+            const w = bilinearWeights(fx, fy);
 
             const _i00: usize = @intCast(x0 * self.grid_size_y + y0);
             const _i10: usize = _i00 + gy_us;
@@ -625,12 +625,12 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
             const v2: f32 = if (type_arr[_i11] != .air or (_i11 > 0 and type_arr[_i11 - 1] != .air)) 1.0 else 0.0;
             const v3: f32 = if (type_arr[_i01] != .air or (_i01 > 0 and type_arr[_i01 - 1] != .air)) 1.0 else 0.0;
 
-            const tw = v0 * w00 + v1 * w10 + v2 * w11 + v3 * w01;
+            const tw = v0 * w.w00 + v1 * w.w10 + v2 * w.w11 + v3 * w.w01;
 
             if (tw > 0.0) {
-                const pic = (v0 * w00 * v[_i00] + v1 * w10 * v[_i10] + v2 * w11 * v[_i11] + v3 * w01 * v[_i01]) / tw;
-                const corr = (v0 * w00 * (v[_i00] - prev_v[_i00]) + v1 * w10 * (v[_i10] - prev_v[_i10]) +
-                    v2 * w11 * (v[_i11] - prev_v[_i11]) + v3 * w01 * (v[_i01] - prev_v[_i01])) / tw;
+                const pic = (v0 * w.w00 * v[_i00] + v1 * w.w10 * v[_i10] + v2 * w.w11 * v[_i11] + v3 * w.w01 * v[_i01]) / tw;
+                const corr = (v0 * w.w00 * (v[_i00] - prev_v[_i00]) + v1 * w.w10 * (v[_i10] - prev_v[_i10]) +
+                    v2 * w.w11 * (v[_i11] - prev_v[_i11]) + v3 * w.w01 * (v[_i01] - prev_v[_i01])) / tw;
 
                 vel_y[i] = (1.0 - flip_ratio) * pic + flip_ratio * (vel_y[i] + corr);
             }

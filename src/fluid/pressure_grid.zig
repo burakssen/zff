@@ -16,9 +16,14 @@ cell_type: []CellType, // Cell classification
 
 pub fn init(allocator: std.mem.Allocator, num_cells: usize) !PressureGrid {
     const p = try allocator.alloc(f32, num_cells);
+    errdefer allocator.free(p);
     const s = try allocator.alloc(f32, num_cells);
+    errdefer allocator.free(s);
     const density = try allocator.alloc(f32, num_cells);
+    errdefer allocator.free(density);
     const cell_type = try allocator.alloc(CellType, num_cells);
+    errdefer allocator.free(cell_type);
+
     @memset(p, 0);
     @memset(s, 0);
     @memset(density, 0);

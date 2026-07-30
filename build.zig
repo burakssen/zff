@@ -108,11 +108,26 @@ pub fn build(b: *std.Build) !void {
 
     if (target.result.os.tag == .macos) {
         exe.root_module.linkFramework("OpenGL", .{});
-    } else if (target.result.os.tag == .linux or target.result.os.tag == .windows) {
+    } else if (target.result.os.tag == .linux) {
         exe.root_module.linkSystemLibrary("GL", .{});
+    } else if (target.result.os.tag == .windows) {
+        exe.root_module.linkSystemLibrary("opengl32", .{});
     }
 
     b.installArtifact(exe);
+
+    // Test step
+    const unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/unit_test.zig"),
+        }),
+    });
+
+    const run_unit_tests = b.addRunArtifact(unit_tests);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_unit_tests.step);
 
     // Run step
     const run_step = b.step("run", "Run the flip executable");
