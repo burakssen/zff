@@ -1,15 +1,20 @@
-// ponytail: main entry point with benchmark mode
+// ponytail: main entry point supporting both WASM and native targets
 const std = @import("std");
 const builtin = @import("builtin");
 
 const rl = @import("raylib");
 const AppState = @import("core/app_state.zig");
 
-pub fn main(init: std.process.Init) !void {
-    const allocator = switch (builtin.os.tag) {
-        .emscripten => std.heap.c_allocator,
-        else => init.gpa,
-    };
+pub const main = if (builtin.os.tag == .emscripten) emscriptenMain else nativeMain;
+
+fn emscriptenMain() !void {
+    var app = try AppState.init(std.heap.c_allocator);
+    defer app.deinit();
+    try app.run();
+}
+
+fn nativeMain(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
     var app = try AppState.init(allocator);
     defer app.deinit();
