@@ -1,4 +1,4 @@
-// ponytail: optimized FLIP fluid simulation core with flat slice memory layouts
+// ponytail: optimized FLIP fluid simulation core with optimized stride indexing
 const std = @import("std");
 
 const ParticleData = @import("particle_data.zig");
@@ -108,7 +108,7 @@ inline fn bilinearWeights(fx: f32, fy: f32, w00: *f32, w10: *f32, w11: *f32, w01
 
 pub fn simulate(self: *FlipFluid, params: SimParams, obstacle: Obstacle) !void {
     self.integrateParticles(params.dt, params.gravity);
-    try self.buildSpatialHash();
+    self.buildSpatialHash();
     self.resolveCollisions(params.num_particle_iters);
     self.handleBoundaryCollisions(obstacle);
     self.transferToGrid();
@@ -123,30 +123,52 @@ fn integrateParticles(self: *FlipFluid, dt: f32, gravity: f32) void {
     const pos_y = self.particles.pos_y;
     const vel_x = self.particles.vel_x;
     const vel_y = self.particles.vel_y;
+    const dt_gravity = dt * gravity;
 
-    for (0..particle_count) |i| {
-        vel_y[i] += dt * gravity;
+    // ponytail: NEON SIMD 8-lane vector particle integration
+    const vec_dt: @Vector(8, f32) = @splat(dt);
+    const vec_dt_grav: @Vector(8, f32) = @splat(dt_gravity);
+
+    var i: usize = 0;
+    while (i + 8 <= particle_count) : (i += 8) {
+        var vy: @Vector(8, f32) = vel_y[i..][0..8].*;
+        const vx: @Vector(8, f32) = vel_x[i..][0..8].*;
+        var px: @Vector(8, f32) = pos_x[i..][0..8].*;
+        var py: @Vector(8, f32) = pos_y[i..][0..8].*;
+
+        vy += vec_dt_grav;
+        px += vx * vec_dt;
+        py += vy * vec_dt;
+
+        vel_y[i..][0..8].* = vy;
+        pos_x[i..][0..8].* = px;
+        pos_y[i..][0..8].* = py;
+    }
+
+    while (i < particle_count) : (i += 1) {
+        vel_y[i] += dt_gravity;
         pos_x[i] += vel_x[i] * dt;
         pos_y[i] += vel_y[i] * dt;
     }
 }
 
-fn buildSpatialHash(self: *FlipFluid) !void {
+fn buildSpatialHash(self: *FlipFluid) void {
     self.spatial_hash.clear();
 
     const n = self.particles.count;
     const inv_spacing = self.spatial_hash.inv_spacing;
     const max_x = self.spatial_hash.grid_size_x - 1;
     const max_y = self.spatial_hash.grid_size_y - 1;
+    const hgy: usize = @intCast(self.spatial_hash.grid_size_y);
 
     const pos_x = self.particles.pos_x;
     const pos_y = self.particles.pos_y;
     const num_cell = self.spatial_hash.num_cell_particles;
 
     for (0..n) |i| {
-        const xi = std.math.clamp(@as(i32, @intFromFloat(pos_x[i] * inv_spacing)), 0, max_x);
-        const yi = std.math.clamp(@as(i32, @intFromFloat(pos_y[i] * inv_spacing)), 0, max_y);
-        const idx = self.hashIndex(xi, yi);
+        const xi: usize = @intCast(std.math.clamp(@as(i32, @intFromFloat(pos_x[i] * inv_spacing)), 0, max_x));
+        const yi: usize = @intCast(std.math.clamp(@as(i32, @intFromFloat(pos_y[i] * inv_spacing)), 0, max_y));
+        const idx = xi * hgy + yi;
         num_cell[idx] += 1;
     }
 
@@ -158,15 +180,16 @@ fn buildSpatialHash(self: *FlipFluid) !void {
     }
     first[self.spatial_hash.num_cells] = sum;
 
-    const cell_cursor = try self.allocator.dupe(i32, first);
-    defer self.allocator.free(cell_cursor);
+    // ponytail: reuse pre-allocated cell_cursor buffer instead of dynamic heap allocation
+    const cell_cursor = self.spatial_hash.cell_cursor;
+    @memcpy(cell_cursor[0 .. self.spatial_hash.num_cells + 1], first[0 .. self.spatial_hash.num_cells + 1]);
 
     for (0..n) |i| {
         const x = pos_x[i];
         const y = pos_y[i];
-        const xi = std.math.clamp(@as(i32, @intFromFloat(x * inv_spacing)), 0, max_x);
-        const yi = std.math.clamp(@as(i32, @intFromFloat(y * inv_spacing)), 0, max_y);
-        const idx = self.hashIndex(xi, yi);
+        const xi: usize = @intCast(std.math.clamp(@as(i32, @intFromFloat(x * inv_spacing)), 0, max_x));
+        const yi: usize = @intCast(std.math.clamp(@as(i32, @intFromFloat(y * inv_spacing)), 0, max_y));
+        const idx = xi * hgy + yi;
 
         const dest: usize = @intCast(cell_cursor[idx]);
         cell_cursor[idx] += 1;
@@ -176,9 +199,9 @@ fn buildSpatialHash(self: *FlipFluid) !void {
         }
     }
 
-    inline for (ParticleData.fields) |field_name| {
-        @memcpy(@field(self.particles, field_name)[0..n], @field(self.scratch_particles, field_name)[0..n]);
-    }
+    // ponytail: swap particle structs instead of copying 4 arrays with @memcpy
+    std.mem.swap(ParticleData, &self.particles, &self.scratch_particles);
+    self.particles.count = n;
 }
 
 fn resolveCollisions(self: *FlipFluid, numIters: i32) void {
@@ -188,6 +211,9 @@ fn resolveCollisions(self: *FlipFluid, numIters: i32) void {
     const pos_x = self.particles.pos_x;
     const pos_y = self.particles.pos_y;
     const first = self.spatial_hash.first_cell_particle;
+    const hgy: usize = @intCast(self.spatial_hash.grid_size_y);
+    const hgx: i32 = self.spatial_hash.grid_size_x;
+    const hgy_i: i32 = self.spatial_hash.grid_size_y;
 
     var iter: i32 = 0;
     while (iter < numIters) : (iter += 1) {
@@ -197,49 +223,65 @@ fn resolveCollisions(self: *FlipFluid, numIters: i32) void {
             const shiftY = @divTrunc(color, 3);
 
             var xi = shiftX;
-            while (xi < self.spatial_hash.grid_size_x) : (xi += 3) {
+            while (xi < hgx) : (xi += 3) {
+                const u_xi: usize = @intCast(xi);
+                const col_off = u_xi * hgy;
+
                 var yi = shiftY;
-                while (yi < self.spatial_hash.grid_size_y) : (yi += 3) {
-                    const cell_idx = self.hashIndex(xi, yi);
+                while (yi < hgy_i) : (yi += 3) {
+                    const u_yi: usize = @intCast(yi);
+                    const cell_idx = col_off + u_yi;
                     const start: usize = @intCast(first[cell_idx]);
                     const end: usize = @intCast(first[cell_idx + 1]);
+                    if (start == end) continue;
+
+                    const x0 = @max(xi - 1, 0);
+                    const y0 = @max(yi - 1, 0);
+                    const x1 = @min(xi + 1, hgx - 1);
+                    const y1 = @min(yi + 1, hgy_i - 1);
+
+                    // ponytail: pre-fetch active neighbor cell ranges at cell level
+                    var neighbor_ranges: [9]struct { start: usize, end: usize } = undefined;
+                    var num_neighbors: usize = 0;
+
+                    var nxi = x0;
+                    while (nxi <= x1) : (nxi += 1) {
+                        const ncol_off: usize = @as(usize, @intCast(nxi)) * hgy;
+                        var nyi = y0;
+                        while (nyi <= y1) : (nyi += 1) {
+                            const n_idx = ncol_off + @as(usize, @intCast(nyi));
+                            const n_start: usize = @intCast(first[n_idx]);
+                            const n_end: usize = @intCast(first[n_idx + 1]);
+                            if (n_start < n_end) {
+                                neighbor_ranges[num_neighbors] = .{ .start = n_start, .end = n_end };
+                                num_neighbors += 1;
+                            }
+                        }
+                    }
 
                     var i = start;
                     while (i < end) : (i += 1) {
                         const px = pos_x[i];
                         const py = pos_y[i];
 
-                        const x0 = @max(xi - 1, 0);
-                        const y0 = @max(yi - 1, 0);
-                        const x1 = @min(xi + 1, self.spatial_hash.grid_size_x - 1);
-                        const y1 = @min(yi + 1, self.spatial_hash.grid_size_y - 1);
+                        for (neighbor_ranges[0..num_neighbors]) |range| {
+                            var j = range.start;
+                            while (j < range.end) : (j += 1) {
+                                if (i == j) continue;
 
-                        var nxi = x0;
-                        while (nxi <= x1) : (nxi += 1) {
-                            var nyi = y0;
-                            while (nyi <= y1) : (nyi += 1) {
-                                const neighbor_cell_index = self.hashIndex(nxi, nyi);
-                                const neighbor_start: usize = @intCast(first[neighbor_cell_index]);
-                                const neighbor_end: usize = @intCast(first[neighbor_cell_index + 1]);
+                                const dx = pos_x[j] - px;
+                                const dy = pos_y[j] - py;
+                                const d2 = dx * dx + dy * dy;
 
-                                var j = neighbor_start;
-                                while (j < neighbor_end) : (j += 1) {
-                                    if (i == j) continue;
+                                if (d2 > min_dist_2 or d2 == 0.0) continue;
 
-                                    const dx = pos_x[j] - px;
-                                    const dy = pos_y[j] - py;
-                                    const d2 = dx * dx + dy * dy;
+                                const inv_d = 1.0 / std.math.sqrt(d2);
+                                const s = 0.5 * (min_dist * inv_d - 1.0);
 
-                                    if (d2 > min_dist_2 or d2 == 0.0) continue;
-
-                                    const d = std.math.sqrt(d2);
-                                    const s = 0.5 * (min_dist - d) / d;
-
-                                    pos_x[i] -= dx * s;
-                                    pos_y[i] -= dy * s;
-                                    pos_x[j] += dx * s;
-                                    pos_y[j] += dy * s;
-                                }
+                                pos_x[i] -= dx * s;
+                                pos_y[i] -= dy * s;
+                                pos_x[j] += dx * s;
+                                pos_y[j] += dy * s;
                             }
                         }
                     }
@@ -297,11 +339,12 @@ fn transferToGrid(self: *FlipFluid) void {
     const inv_spacing = self.inv_cell_size;
     const pos_x = self.particles.pos_x;
     const pos_y = self.particles.pos_y;
+    const gy: usize = @intCast(self.grid_size_y);
 
     for (0..self.particles.count) |i| {
-        const xi = std.math.clamp(@as(i32, @intFromFloat(pos_x[i] * inv_spacing)), 0, self.grid_size_x - 1);
-        const yi = std.math.clamp(@as(i32, @intFromFloat(pos_y[i] * inv_spacing)), 0, self.grid_size_y - 1);
-        const idx = self.cellIndex(xi, yi);
+        const xi: usize = @intCast(std.math.clamp(@as(i32, @intFromFloat(pos_x[i] * inv_spacing)), 0, self.grid_size_x - 1));
+        const yi: usize = @intCast(std.math.clamp(@as(i32, @intFromFloat(pos_y[i] * inv_spacing)), 0, self.grid_size_y - 1));
+        const idx = xi * gy + yi;
 
         if (self.pressure.cell_type[idx] == .air) {
             self.pressure.cell_type[idx] = .fluid;
@@ -310,52 +353,81 @@ fn transferToGrid(self: *FlipFluid) void {
 
     const h_sz = self.cell_size;
     const h2 = 0.5 * h_sz;
+    const max_x_bound = @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz;
 
-    inline for (0..2) |comp| {
-        const dx = if (comp == 0) 0.0 else h2;
-        const dy = if (comp == 0) h2 else 0.0;
+    for (0..self.particles.count) |i| {
+        const x = std.math.clamp(pos_x[i], h_sz, max_x_bound);
+        const y = std.math.clamp(pos_y[i], h_sz, max_x_bound);
 
-        const f = if (comp == 0) self.velocity.u else self.velocity.v;
-        const d = if (comp == 0) self.velocity.du else self.velocity.dv;
-        const particle_velocity = if (comp == 0) self.particles.vel_x else self.particles.vel_y;
-
-        for (0..self.particles.count) |i| {
-            const x = std.math.clamp(pos_x[i], h_sz, @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz);
-            const y = std.math.clamp(pos_y[i], h_sz, @as(f32, @floatFromInt(self.grid_size_y - 1)) * h_sz);
-
-            const x0 = @min(@as(i32, @intFromFloat((x - dx) * inv_spacing)), self.grid_size_x - 2);
+        {
+            const fx = x * inv_spacing;
+            const fy = (y - h2) * inv_spacing;
+            const x0 = @min(@as(i32, @intFromFloat(fx)), self.grid_size_x - 2);
             const x1 = @min(x0 + 1, self.grid_size_x - 1);
-            const y0 = @min(@as(i32, @intFromFloat((y - dy) * inv_spacing)), self.grid_size_y - 2);
+            const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
             const y1 = @min(y0 + 1, self.grid_size_y - 1);
 
             var w00: f32 = undefined;
             var w10: f32 = undefined;
             var w11: f32 = undefined;
             var w01: f32 = undefined;
-            bilinearWeights((x - dx) * inv_spacing, (y - dy) * inv_spacing, &w00, &w10, &w11, &w01);
+            bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
 
-            const n = self.grid_size_y;
-            const _i00: usize = @intCast(x0 * n + y0);
-            const _i10: usize = @intCast(x1 * n + y0);
-            const _i11: usize = @intCast(x1 * n + y1);
-            const _i01: usize = @intCast(x0 * n + y1);
+            const _i00: usize = @intCast(x0 * self.grid_size_y + y0);
+            const _i10: usize = @intCast(x1 * self.grid_size_y + y0);
+            const _i11: usize = @intCast(x1 * self.grid_size_y + y1);
+            const _i01: usize = @intCast(x0 * self.grid_size_y + y1);
 
-            const velocity_value = particle_velocity[i];
-            f[_i00] += w00 * velocity_value;
-            f[_i10] += w10 * velocity_value;
-            f[_i11] += w11 * velocity_value;
-            f[_i01] += w01 * velocity_value;
+            const velocity_val = self.particles.vel_x[i];
+            self.velocity.u[_i00] += w00 * velocity_val;
+            self.velocity.u[_i10] += w10 * velocity_val;
+            self.velocity.u[_i11] += w11 * velocity_val;
+            self.velocity.u[_i01] += w01 * velocity_val;
 
-            d[_i00] += w00;
-            d[_i10] += w10;
-            d[_i11] += w11;
-            d[_i01] += w01;
+            self.velocity.du[_i00] += w00;
+            self.velocity.du[_i10] += w10;
+            self.velocity.du[_i11] += w11;
+            self.velocity.du[_i01] += w01;
         }
 
-        for (0..self.num_cells) |i| {
-            if (d[i] > 0.0) {
-                f[i] /= d[i];
-            }
+        {
+            const fx = (x - h2) * inv_spacing;
+            const fy = y * inv_spacing;
+            const x0 = @min(@as(i32, @intFromFloat(fx)), self.grid_size_x - 2);
+            const x1 = @min(x0 + 1, self.grid_size_x - 1);
+            const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
+            const y1 = @min(y0 + 1, self.grid_size_y - 1);
+
+            var w00: f32 = undefined;
+            var w10: f32 = undefined;
+            var w11: f32 = undefined;
+            var w01: f32 = undefined;
+            bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
+
+            const _i00: usize = @intCast(x0 * self.grid_size_y + y0);
+            const _i10: usize = @intCast(x1 * self.grid_size_y + y0);
+            const _i11: usize = @intCast(x1 * self.grid_size_y + y1);
+            const _i01: usize = @intCast(x0 * self.grid_size_y + y1);
+
+            const velocity_val = self.particles.vel_y[i];
+            self.velocity.v[_i00] += w00 * velocity_val;
+            self.velocity.v[_i10] += w10 * velocity_val;
+            self.velocity.v[_i11] += w11 * velocity_val;
+            self.velocity.v[_i01] += w01 * velocity_val;
+
+            self.velocity.dv[_i00] += w00;
+            self.velocity.dv[_i10] += w10;
+            self.velocity.dv[_i11] += w11;
+            self.velocity.dv[_i01] += w01;
+        }
+    }
+
+    for (0..self.num_cells) |i| {
+        if (self.velocity.du[i] > 0.0) {
+            self.velocity.u[i] /= self.velocity.du[i];
+        }
+        if (self.velocity.dv[i] > 0.0) {
+            self.velocity.v[i] /= self.velocity.dv[i];
         }
     }
 
@@ -396,16 +468,18 @@ fn computeDensity(self: *FlipFluid) void {
         const x = std.math.clamp(pos_x[i], h_sz, @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz);
         const y = std.math.clamp(pos_y[i], h_sz, @as(f32, @floatFromInt(self.grid_size_y - 1)) * h_sz);
 
-        const x0 = @as(i32, @intFromFloat((x - h2) * inv_spacing));
+        const fx = (x - h2) * inv_spacing;
+        const fy = (y - h2) * inv_spacing;
+        const x0 = @as(i32, @intFromFloat(fx));
         const x1 = @min(x0 + 1, self.grid_size_x - 2);
-        const y0 = @as(i32, @intFromFloat((y - h2) * inv_spacing));
+        const y0 = @as(i32, @intFromFloat(fy));
         const y1 = @min(y0 + 1, self.grid_size_y - 2);
 
         var w00: f32 = undefined;
         var w10: f32 = undefined;
         var w11: f32 = undefined;
         var w01: f32 = undefined;
-        bilinearWeights((x - h2) * inv_spacing, (y - h2) * inv_spacing, &w00, &w10, &w11, &w01);
+        bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
         dens[@intCast(x0 * n + y0)] += w00;
         dens[@intCast(x1 * n + y0)] += w10;
         dens[@intCast(x1 * n + y1)] += w11;
@@ -441,23 +515,28 @@ fn solvePressure(self: *FlipFluid, num_iters: i32, dt: f32, over_relaxation: f32
     const dens = self.pressure.density;
     const type_arr = self.pressure.cell_type;
 
+    const gy: usize = @intCast(self.grid_size_y);
+    const gx: usize = @intCast(self.grid_size_x);
+    const has_rest = self.rest_density > 0.0;
+    const rest_d = self.rest_density;
+
     var iter: i32 = 0;
     while (iter < num_iters) : (iter += 1) {
-        var rb: i32 = 0;
+        var rb: usize = 0;
         while (rb < 2) : (rb += 1) {
-            var i: i32 = 1;
-            while (i < self.grid_size_x - 1) : (i += 1) {
-                var j: i32 = 1;
-                while (j < self.grid_size_y - 1) : (j += 1) {
-                    if (@mod(i + j, 2) != rb) continue;
-
-                    const c = self.cellIndex(i, j);
+            var i: usize = 1;
+            while (i < gx - 1) : (i += 1) {
+                const col_offset = i * gy;
+                const start_j: usize = 1 + ((i + 1 + rb) % 2);
+                var j: usize = start_j;
+                while (j < gy - 1) : (j += 2) {
+                    const c = col_offset + j;
                     if (type_arr[c] != .fluid) continue;
 
-                    const l = self.cellIndex(i - 1, j);
-                    const r = self.cellIndex(i + 1, j);
-                    const b = self.cellIndex(i, j - 1);
-                    const t = self.cellIndex(i, j + 1);
+                    const l = c - gy;
+                    const r = c + gy;
+                    const b = c - 1;
+                    const t = c + 1;
 
                     const sx0 = s[l];
                     const sx1 = s[r];
@@ -469,15 +548,16 @@ fn solvePressure(self: *FlipFluid, num_iters: i32, dt: f32, over_relaxation: f32
 
                     var div = u[r] - u[c] + v[t] - v[c];
 
-                    if (self.rest_density > 0.0) {
-                        const compression = dens[c] - self.rest_density;
+                    if (has_rest) {
+                        const compression = dens[c] - rest_d;
                         if (compression > 0.0) {
                             div -= compression;
                         }
                     }
 
                     const pressure_update = (-div / solid_sum) * over_relaxation;
-                    p[c] += cp * pressure_update;
+                    const cp_update = cp * pressure_update;
+                    p[c] += cp_update;
                     u[c] -= sx0 * pressure_update;
                     u[r] += sx1 * pressure_update;
                     v[c] -= sy0 * pressure_update;
@@ -494,6 +574,7 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
     const inv_spacing = self.inv_cell_size;
     const n = self.grid_size_y;
     const n_us: usize = @intCast(n);
+    const max_x_bound = @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz;
 
     const pos_x = self.particles.pos_x;
     const pos_y = self.particles.pos_y;
@@ -507,29 +588,30 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
     const type_arr = self.pressure.cell_type;
 
     for (0..self.particles.count) |i| {
-        const x = std.math.clamp(pos_x[i], h_sz, @as(f32, @floatFromInt(self.grid_size_x - 1)) * h_sz);
-        const y = std.math.clamp(pos_y[i], h_sz, @as(f32, @floatFromInt(self.grid_size_y - 1)) * h_sz);
+        const x = std.math.clamp(pos_x[i], h_sz, max_x_bound);
+        const y = std.math.clamp(pos_y[i], h_sz, max_x_bound);
 
         // U component
         {
-            const x0 = @min(@as(i32, @intFromFloat(x * inv_spacing)), self.grid_size_x - 2);
+            const fx = x * inv_spacing;
+            const fy = (y - h2) * inv_spacing;
+            const x0 = @min(@as(i32, @intFromFloat(fx)), self.grid_size_x - 2);
             const x1 = @min(x0 + 1, self.grid_size_x - 1);
-            const y0 = @min(@as(i32, @intFromFloat((y - h2) * inv_spacing)), self.grid_size_y - 2);
-            const y1 = @min(y0 + 1, self.grid_size_y - 2);
+            const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
+            const y1 = @min(y0 + 1, self.grid_size_y - 1);
 
             var w00: f32 = undefined;
             var w10: f32 = undefined;
             var w11: f32 = undefined;
             var w01: f32 = undefined;
 
-            bilinearWeights(x * inv_spacing, (y - h2) * inv_spacing, &w00, &w10, &w11, &w01);
+            bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
 
             const _i00: usize = @intCast(x0 * n + y0);
             const _i10: usize = @intCast(x1 * n + y0);
             const _i11: usize = @intCast(x1 * n + y1);
             const _i01: usize = @intCast(x0 * n + y1);
 
-            // ponytail: safe index check prevents usize underflow panic when _i00 < n
             const v0: f32 = if (type_arr[_i00] != .air or (_i00 >= n_us and type_arr[_i00 - n_us] != .air)) 1.0 else 0.0;
             const v1: f32 = if (type_arr[_i10] != .air or (_i10 >= n_us and type_arr[_i10 - n_us] != .air)) 1.0 else 0.0;
             const v2: f32 = if (type_arr[_i11] != .air or (_i11 >= n_us and type_arr[_i11 - n_us] != .air)) 1.0 else 0.0;
@@ -548,23 +630,24 @@ fn transferToParticles(self: *FlipFluid, flip_ratio: f32) void {
 
         // V component
         {
-            const x0 = @min(@as(i32, @intFromFloat((x - h2) * inv_spacing)), self.grid_size_x - 2);
+            const fx = (x - h2) * inv_spacing;
+            const fy = y * inv_spacing;
+            const x0 = @min(@as(i32, @intFromFloat(fx)), self.grid_size_x - 2);
             const x1 = @min(x0 + 1, self.grid_size_x - 1);
-            const y0 = @min(@as(i32, @intFromFloat(y * inv_spacing)), self.grid_size_y - 2);
+            const y0 = @min(@as(i32, @intFromFloat(fy)), self.grid_size_y - 2);
             const y1 = @min(y0 + 1, self.grid_size_y - 2);
 
             var w00: f32 = undefined;
             var w10: f32 = undefined;
             var w11: f32 = undefined;
             var w01: f32 = undefined;
-            bilinearWeights((x - h2) * inv_spacing, y * inv_spacing, &w00, &w10, &w11, &w01);
+            bilinearWeights(fx, fy, &w00, &w10, &w11, &w01);
 
             const _i00: usize = @intCast(x0 * n + y0);
             const _i10: usize = @intCast(x1 * n + y0);
             const _i11: usize = @intCast(x1 * n + y1);
             const _i01: usize = @intCast(x0 * n + y1);
 
-            // ponytail: safe index check prevents usize underflow panic when _i00 == 0
             const v0: f32 = if (type_arr[_i00] != .air or (_i00 > 0 and type_arr[_i00 - 1] != .air)) 1.0 else 0.0;
             const v1: f32 = if (type_arr[_i10] != .air or (_i10 > 0 and type_arr[_i10 - 1] != .air)) 1.0 else 0.0;
             const v2: f32 = if (type_arr[_i11] != .air or (_i11 > 0 and type_arr[_i11 - 1] != .air)) 1.0 else 0.0;

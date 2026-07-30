@@ -111,21 +111,13 @@ fn handleInput(self: *AppState) void {
 }
 
 fn renderFrame(self: *AppState) void {
-    rl.BeginTextureMode(self.render_target);
+    // ponytail: render directly to screen buffer without intermediate FBO pass
+    rl.BeginDrawing();
     rl.ClearBackground(rl.BLACK);
 
     rl.BeginMode2D(self.camera);
     self.drawScene();
     rl.EndMode2D();
-    rl.EndTextureMode();
-
-    rl.BeginDrawing();
-    rl.ClearBackground(rl.BLACK);
-
-    const source = rl.Rectangle{ .x = 0, .y = 0, .width = @floatFromInt(self.render_target.texture.width), .height = -@as(f32, @floatFromInt(self.render_target.texture.height)) };
-    const dest = rl.Rectangle{ .x = 0, .y = 0, .width = self.screen_width, .height = self.screen_height };
-    const origin = rl.Vector2{ .x = 0, .y = 0 };
-    rl.DrawTexturePro(self.render_target.texture, source, dest, origin, 0.0, rl.WHITE);
 
     if (self.paused) {
         rl.DrawText("PAUSED", 10, 10, 20, rl.YELLOW);
@@ -201,7 +193,7 @@ fn setObstacle(self: *AppState, x: f32, y: f32, reset: bool) void {
     self.show_obstacle = true;
 }
 
-fn simulateStep(self: *AppState) !void {
+pub fn simulateStep(self: *AppState) !void {
     if (self.flip_fluid) |*f| {
         try f.simulate(self.sim_params, self.obstacle);
         self.frame_number += 1;
@@ -229,6 +221,15 @@ fn drawScene(self: *AppState) void {
 
 pub fn run(self: *AppState) !void {
     if (builtin.os.tag == .emscripten) {
+        const emscripten_set_main_loop_arg = struct {
+            extern fn emscripten_set_main_loop_arg(
+                func: ?*const fn (?*anyopaque) callconv(.c) void,
+                arg: ?*anyopaque,
+                fps: c_int,
+                simulate_infinite_loop: c_int,
+            ) void;
+        }.emscripten_set_main_loop_arg;
+
         const loop = struct {
             fn runLoop(arg: ?*anyopaque) callconv(.c) void {
                 const app: *AppState = @ptrCast(@alignCast(arg));
@@ -238,7 +239,7 @@ pub fn run(self: *AppState) !void {
             }
         }.runLoop;
 
-        rl.emscripten_set_main_loop_arg(loop, self, 0, true);
+        emscripten_set_main_loop_arg(loop, self, 0, 1);
     } else {
         while (!rl.WindowShouldClose()) {
             try self.update();

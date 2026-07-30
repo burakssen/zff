@@ -1,4 +1,4 @@
-// ponytail: high performance OpenGL particle line renderer
+// ponytail: high performance interleaved OpenGL particle line renderer
 const std = @import("std");
 
 const rl = @import("raylib");
@@ -6,50 +6,58 @@ const FlipFluid = @import("../fluid/flip_fluid.zig");
 
 const ParticleRenderer = @This();
 
+// ponytail: single interleaved vertex layout (3x f32 pos + 4x u8 color)
+pub const ParticleVertex = extern struct {
+    x: f32,
+    y: f32,
+    z: f32 = 0.0,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8 = 255,
+};
+
 vao_id: u32 = 0,
-pos_buffer_id: u32 = 0,
-col_buffer_id: u32 = 0,
+vbo_id: u32 = 0,
 max_particles: usize = 0,
 
-pos_data: []f32,
-col_data: []u8,
+vertex_data: []ParticleVertex,
 allocator: std.mem.Allocator,
 
 pub fn init(allocator: std.mem.Allocator, max_count: usize) !ParticleRenderer {
-    const vertex_count = max_count * 2; // Lines
+    const vertex_count = max_count * 2; // 2 vertices per line segment
 
-    const pos_data = try allocator.alloc(f32, vertex_count * 3);
-    const col_data = try allocator.alloc(u8, vertex_count * 4);
+    const vertex_data = try allocator.alloc(ParticleVertex, vertex_count);
 
     const vao_id = rl.rlLoadVertexArray();
     _ = rl.rlEnableVertexArray(vao_id);
-    const pos_buffer_id = rl.rlLoadVertexBuffer(pos_data.ptr, @intCast(pos_data.len * @sizeOf(f32)), true);
-    rl.rlSetVertexAttribute(0, 3, rl.RL_FLOAT, false, 0, 0);
+
+    const stride: c_int = @sizeOf(ParticleVertex);
+    const vbo_id = rl.rlLoadVertexBuffer(vertex_data.ptr, @intCast(vertex_data.len * @sizeOf(ParticleVertex)), true);
+
+    // Attribute 0: Position (3 x f32)
+    rl.rlSetVertexAttribute(0, 3, rl.RL_FLOAT, false, stride, 0);
     rl.rlEnableVertexAttribute(0);
 
-    const col_buffer_id = rl.rlLoadVertexBuffer(col_data.ptr, @intCast(col_data.len * @sizeOf(u8)), true);
-    rl.rlSetVertexAttribute(3, 4, rl.RL_UNSIGNED_BYTE, true, 0, 0);
+    // Attribute 3: Color (4 x u8, normalized)
+    rl.rlSetVertexAttribute(3, 4, rl.RL_UNSIGNED_BYTE, true, stride, @offsetOf(ParticleVertex, "r"));
     rl.rlEnableVertexAttribute(3);
 
     rl.rlDisableVertexArray();
 
     return ParticleRenderer{
         .vao_id = vao_id,
-        .pos_buffer_id = pos_buffer_id,
-        .col_buffer_id = col_buffer_id,
+        .vbo_id = vbo_id,
         .max_particles = max_count,
-        .pos_data = pos_data,
-        .col_data = col_data,
+        .vertex_data = vertex_data,
         .allocator = allocator,
     };
 }
 
 pub fn deinit(self: *ParticleRenderer) void {
     rl.rlUnloadVertexArray(self.vao_id);
-    rl.rlUnloadVertexBuffer(self.pos_buffer_id);
-    rl.rlUnloadVertexBuffer(self.col_buffer_id);
-    self.allocator.free(self.pos_data);
-    self.allocator.free(self.col_data);
+    rl.rlUnloadVertexBuffer(self.vbo_id);
+    self.allocator.free(self.vertex_data);
 }
 
 pub fn draw(self: *ParticleRenderer, flip_fluid: *const FlipFluid, c_scale: f32, height: f32) void {
@@ -61,9 +69,58 @@ pub fn draw(self: *ParticleRenderer, flip_fluid: *const FlipFluid, c_scale: f32,
     const vel_x = flip_fluid.particles.vel_x;
     const vel_y = flip_fluid.particles.vel_y;
 
-    const trail_length: f32 = 0.01;
+    // ponytail: pre-multiply scale and trail length constant outside loop
+    const trail_scale = 0.01 * c_scale;
 
-    for (0..count) |i| {
+    // ponytail: SIMD 8-lane vectorized vertex generation
+    const vec_c_scale: @Vector(8, f32) = @splat(c_scale);
+    const vec_height: @Vector(8, f32) = @splat(height);
+    const vec_trail_scale: @Vector(8, f32) = @splat(trail_scale);
+
+    var i: usize = 0;
+    while (i + 8 <= count) : (i += 8) {
+        const px8: @Vector(8, f32) = pos_x[i..][0..8].* * vec_c_scale;
+        const py8: @Vector(8, f32) = vec_height - (pos_y[i..][0..8].* * vec_c_scale);
+        const vx8: @Vector(8, f32) = vel_x[i..][0..8].*;
+        const vy8: @Vector(8, f32) = vel_y[i..][0..8].*;
+
+        const speed_sq8: @Vector(8, f32) = vx8 * vx8 + vy8 * vy8;
+        const end_x8: @Vector(8, f32) = px8 - (vx8 * vec_trail_scale);
+        const end_y8: @Vector(8, f32) = py8 + (vy8 * vec_trail_scale);
+
+        inline for (0..8) |offset| {
+            const idx = (i + offset) * 2;
+            const spd_sq = speed_sq8[offset];
+            const t = if (spd_sq > 15.0) 1.0 else spd_sq * (1.0 / 15.0);
+
+            const r: u8 = @intFromFloat(50.0 + t * 205.0);
+            const g: u8 = @intFromFloat(100.0 + t * 155.0);
+
+            var ey = end_y8[offset];
+            if (spd_sq < 0.1) ey += 1.5;
+
+            self.vertex_data[idx + 0] = .{
+                .x = px8[offset],
+                .y = py8[offset],
+                .z = 0.0,
+                .r = r,
+                .g = g,
+                .b = 255,
+                .a = 255,
+            };
+            self.vertex_data[idx + 1] = .{
+                .x = end_x8[offset],
+                .y = ey,
+                .z = 0.0,
+                .r = r,
+                .g = g,
+                .b = 255,
+                .a = 255,
+            };
+        }
+    }
+
+    while (i < count) : (i += 1) {
         const px = pos_x[i] * c_scale;
         const py = height - (pos_y[i] * c_scale);
         const vx = vel_x[i];
@@ -74,36 +131,34 @@ pub fn draw(self: *ParticleRenderer, flip_fluid: *const FlipFluid, c_scale: f32,
 
         const r: u8 = @intFromFloat(50.0 + t * 205.0);
         const g: u8 = @intFromFloat(100.0 + t * 155.0);
-        const b: u8 = 255;
 
-        const _i6 = i * 6;
-        const _i8 = i * 8;
-
-        self.pos_data[_i6 + 0] = px;
-        self.pos_data[_i6 + 1] = py;
-        self.pos_data[_i6 + 2] = 0.0;
-
-        self.col_data[_i8 + 0] = r;
-        self.col_data[_i8 + 1] = g;
-        self.col_data[_i8 + 2] = b;
-        self.col_data[_i8 + 3] = 255;
-
-        const end_x = px - (vx * trail_length * c_scale);
-        var end_y = py + (vy * trail_length * c_scale);
+        const end_x = px - (vx * trail_scale);
+        var end_y = py + (vy * trail_scale);
         if (speed_sq < 0.1) end_y += 1.5;
 
-        self.pos_data[_i6 + 3] = end_x;
-        self.pos_data[_i6 + 4] = end_y;
-        self.pos_data[_i6 + 5] = 0.0;
-
-        self.col_data[_i8 + 4] = r;
-        self.col_data[_i8 + 5] = g;
-        self.col_data[_i8 + 6] = b;
-        self.col_data[_i8 + 7] = 255;
+        const idx = i * 2;
+        self.vertex_data[idx + 0] = .{
+            .x = px,
+            .y = py,
+            .z = 0.0,
+            .r = r,
+            .g = g,
+            .b = 255,
+            .a = 255,
+        };
+        self.vertex_data[idx + 1] = .{
+            .x = end_x,
+            .y = end_y,
+            .z = 0.0,
+            .r = r,
+            .g = g,
+            .b = 255,
+            .a = 255,
+        };
     }
 
-    rl.rlUpdateVertexBuffer(self.pos_buffer_id, self.pos_data.ptr, @intCast(count * 2 * 3 * @sizeOf(f32)), 0);
-    rl.rlUpdateVertexBuffer(self.col_buffer_id, self.col_data.ptr, @intCast(count * 2 * 4 * @sizeOf(u8)), 0);
+    // ponytail: single VBO update call per frame
+    rl.rlUpdateVertexBuffer(self.vbo_id, self.vertex_data.ptr, @intCast(count * 2 * @sizeOf(ParticleVertex)), 0);
 
     const default_shader_id = rl.rlGetShaderIdDefault();
     rl.rlEnableShader(default_shader_id);

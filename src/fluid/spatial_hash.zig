@@ -1,10 +1,11 @@
-// ponytail: spatial hash grid using flat slices
+// ponytail: spatial hash grid using flat slices with persistent cell_cursor working buffer
 const std = @import("std");
 
 const SpatialHash = @This();
 
 num_cell_particles: []i32,
 first_cell_particle: []i32,
+cell_cursor: []i32,
 particle_ids: []i32,
 
 grid_size_x: i32,
@@ -16,14 +17,17 @@ pub fn init(allocator: std.mem.Allocator, sizeX: i32, sizeY: i32, maxParticles: 
     const num_cells: usize = @intCast(sizeX * sizeY);
     const num_cell_particles = try allocator.alloc(i32, num_cells);
     const first_cell_particle = try allocator.alloc(i32, num_cells + 1);
+    const cell_cursor = try allocator.alloc(i32, num_cells + 1);
     const particle_ids = try allocator.alloc(i32, maxParticles);
     @memset(num_cell_particles, 0);
     @memset(first_cell_particle, 0);
+    @memset(cell_cursor, 0);
     @memset(particle_ids, 0);
 
     return SpatialHash{
         .num_cell_particles = num_cell_particles,
         .first_cell_particle = first_cell_particle,
+        .cell_cursor = cell_cursor,
         .particle_ids = particle_ids,
         .grid_size_x = sizeX,
         .grid_size_y = sizeY,
@@ -35,6 +39,7 @@ pub fn init(allocator: std.mem.Allocator, sizeX: i32, sizeY: i32, maxParticles: 
 pub fn deinit(self: *SpatialHash, allocator: std.mem.Allocator) void {
     allocator.free(self.num_cell_particles);
     allocator.free(self.first_cell_particle);
+    allocator.free(self.cell_cursor);
     allocator.free(self.particle_ids);
 }
 
